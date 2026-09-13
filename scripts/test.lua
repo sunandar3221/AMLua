@@ -14,6 +14,7 @@ end
 
 local frameCount = 0
 local healCooldown = 0
+local greeted = false
 
 -- Register per-frame game loop tick callback
 Game.OnTick(function()
@@ -24,6 +25,13 @@ Game.OnTick(function()
 
     local ped = Player.GetPed()
     if ped ~= nil then
+        -- Welcome message once player ped is active in game
+        if not greeted then
+            greeted = true
+            Game.PrintText("~g~AMLua Test Script Active!~n~~w~Auto-Heal Ready.", 4000)
+            Game.Log("AMLua test.lua: player detected, welcome message displayed.")
+        end
+
         -- Periodic condition check (~every 30 frames / 0.5 second)
         if frameCount % 30 == 0 and healCooldown == 0 then
             local currentHealth = Player.GetHealth(ped)

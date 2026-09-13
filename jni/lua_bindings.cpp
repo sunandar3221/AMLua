@@ -41,13 +41,22 @@ namespace AMLua
 
     // Function pointer types for resolved game symbols
     typedef void* (*FindPlayerPed_t)(int playerNum);
-    // CHud::SetHelpMessage takes (const char* helpLabel, unsigned short* gxtText, bool quickMessage, bool permanent, bool addToBrief, unsigned int nConditionFlag)
-    typedef void  (*SetHelpMessage_t)(const char* helpLabel, unsigned short* gxtText, bool quickMessage, bool permanent, bool addToBrief, unsigned int nConditionFlag);
+    typedef void  (*AsciiToGxtChar_t)(const char* src, unsigned short* dst);
+    // CHud::SetHelpMessage overloads
+    typedef void  (*SetHelpMessage6_t)(const char* helpKey, unsigned short* gxtText, bool quickMessage, bool permanent, bool addToBrief, unsigned int duration);
+    typedef void  (*SetHelpMessage5_t)(const char* helpKey, unsigned short* gxtText, bool quickMessage, bool permanent, bool addToBrief);
+    typedef void  (*SetHelpMessage4_t)(unsigned short* gxtText, bool quickMessage, bool permanent, bool addToBrief);
+    // CMessages::AddMessageJumpQ fallback
+    typedef void  (*AddMessageJumpQ_t)(const char* key, unsigned short* gxtText, unsigned int time, unsigned short flag, bool bPreviousBrief);
     typedef void  (*VehicleFix_t)(void* vehicle);
 
-    static FindPlayerPed_t   pfnFindPlayerPed = nullptr;
-    static SetHelpMessage_t  pfnSetHelpMessage = nullptr;
-    static VehicleFix_t      pfnVehicleFix = nullptr;
+    static FindPlayerPed_t     pfnFindPlayerPed = nullptr;
+    static AsciiToGxtChar_t    pfnAsciiToGxtChar = nullptr;
+    static SetHelpMessage6_t   pfnSetHelpMessage6 = nullptr;
+    static SetHelpMessage5_t   pfnSetHelpMessage5 = nullptr;
+    static SetHelpMessage4_t   pfnSetHelpMessage4 = nullptr;
+    static AddMessageJumpQ_t   pfnAddMessageJumpQ = nullptr;
+    static VehicleFix_t        pfnVehicleFix = nullptr;
 
     const char* GetLogFilePath()
     {
@@ -376,32 +385,52 @@ namespace AMLua
     {
         if (!text || text[0] == '\0') return;
 
-        if (!pfnSetHelpMessage)
+        // Static circular buffer to ensure pointers passed to the engine remain valid across frames
+        static unsigned short s_GxtBufs[4][512] = {{0}};
+        static int s_GxtBufIdx = 0;
+        s_GxtBufIdx = (s_GxtBufIdx + 1) % 4;
+        unsigned short* gxtBuf = s_GxtBufs[s_GxtBufIdx];
+        memset(gxtBuf, 0, sizeof(s_GxtBufs[0]));
+
+        if (pfnAsciiToGxtChar)
         {
-            Log("[DisplayHelpBox] pfnSetHelpMessage is not available");
-            return;
+            pfnAsciiToGxtChar(text, gxtBuf);
+        }
+        else
+        {
+            ConvertToGxt(text, gxtBuf, 512);
         }
 
-        // GTA SA help message string: 16-bit GxtChar buffer (max 256 chars)
-        // Static array because CHud::SetHelpMessage only stores the pointer, it doesn't copy the text.
-        // A stack variable would be destroyed before CHud::Draw is called next frame, causing a crash.
-        // We use a small circular buffer of arrays just in case multiple messages are triggered.
-        static unsigned short gxtBufs[4][256] = {0};
-        static int bufIdx = 0;
-        bufIdx = (bufIdx + 1) % 4;
-        unsigned short* gxtBuf = gxtBufs[bufIdx];
-        
-        memset(gxtBuf, 0, sizeof(gxtBufs[0]));
-        ConvertToGxt(text, gxtBuf, 256);
+        unsigned int timeMs = (duration > 0) ? duration : 3000;
 
-        // Call CHud::SetHelpMessage with safe parameters:
-        // arg 1: short label <= 7 chars (e.g. "AML") to prevent 8-byte buffer overrun
-        // arg 2: 16-bit GXT message pointer
-        // arg 3: bQuick = true
-        // arg 4: bDisplayForever = false
-        // arg 5: bAddToBrief = false
-        // arg 6: nConditionFlag = 0 (MUST BE 0; NOT duration)
-        pfnSetHelpMessage("AML", gxtBuf, true, false, false, 0);
+        if (pfnSetHelpMessage6)
+        {
+            // Call CHud::SetHelpMessage with safe parameters:
+            // arg 1: nullptr (raw custom text, skip GXT key lookup so custom string is displayed)
+            // arg 2: 16-bit GXT message pointer
+            // arg 3: bQuick = false
+            // arg 4: bDisplayForever = false
+            // arg 5: bAddToBrief = true
+            // arg 6: duration in ms (e.g. 3000)
+            pfnSetHelpMessage6(nullptr, gxtBuf, false, false, true, timeMs);
+        }
+        else if (pfnSetHelpMessage5)
+        {
+            pfnSetHelpMessage5(nullptr, gxtBuf, false, false, true);
+        }
+        else if (pfnSetHelpMessage4)
+        {
+            pfnSetHelpMessage4(gxtBuf, false, false, true);
+        }
+        else if (pfnAddMessageJumpQ)
+        {
+            // Fallback: bottom subtitle if CHud::SetHelpMessage is not available
+            pfnAddMessageJumpQ(nullptr, gxtBuf, timeMs, 0, false);
+        }
+        else
+        {
+            Log("[DisplayHelpBox] No HUD help or message function available");
+        }
 
         Log("[DisplayHelpBox] %s", text);
     }
@@ -413,11 +442,6 @@ namespace AMLua
         int timeMs = (int)luaL_optinteger(L, 2, 3000);
 
         DisplayHelpBox(text, (unsigned int)timeMs);
-
-        if (aml)
-        {
-            aml->ShowToast(false, "%s", text);
-        }
         return 0;
     }
 
@@ -488,11 +512,6 @@ namespace AMLua
 
         // Display in GTA SA's built-in top-right help dialog box
         DisplayHelpBox(text.c_str(), 6000);
-
-        if (aml)
-        {
-            aml->ShowToast(false, "AMLua: %zu script(s) loaded", g_LoadedScripts.size());
-        }
     }
 
     static int Lua_ShowScriptList(lua_State* L)
@@ -706,12 +725,27 @@ namespace AMLua
             if (!pfnFindPlayerPed) pfnFindPlayerPed = (FindPlayerPed_t)aml->GetSym(g_pGTASA, "FindPlayerPed");
             Log("Symbol FindPlayerPed: %p", (void*)pfnFindPlayerPed);
 
+            // AsciiToGxtChar: _Z14AsciiToGxtCharPKcPt
+            pfnAsciiToGxtChar = (AsciiToGxtChar_t)aml->GetSym(g_pGTASA, "_Z14AsciiToGxtCharPKcPt");
+            if (!pfnAsciiToGxtChar) pfnAsciiToGxtChar = (AsciiToGxtChar_t)aml->GetSym(g_pGTASA, "AsciiToGxtChar");
+            Log("Symbol AsciiToGxtChar: %p", (void*)pfnAsciiToGxtChar);
+
             // CHud::SetHelpMessage (GTA SA native top-right dialog box)
-            // void CHud::SetHelpMessage(const char* helpLabel, unsigned short* pHelpMsg, bool bQuick, bool bDisplayForever, bool bAddToBrief, unsigned int nConditionFlag)
-            pfnSetHelpMessage = (SetHelpMessage_t)aml->GetSym(g_pGTASA, "_ZN4CHud14SetHelpMessageEPKcPtbbbj");
-            if (!pfnSetHelpMessage) pfnSetHelpMessage = (SetHelpMessage_t)aml->GetSym(g_pGTASA, "_ZN4CHud14SetHelpMessageEPKcPtbbj");
-            if (!pfnSetHelpMessage) pfnSetHelpMessage = (SetHelpMessage_t)aml->GetSym(g_pGTASA, "_ZN4CHud14SetHelpMessageEPKcPtbbb");
-            Log("Symbol CHud::SetHelpMessage: %p", (void*)pfnSetHelpMessage);
+            pfnSetHelpMessage6 = (SetHelpMessage6_t)aml->GetSym(g_pGTASA, "_ZN4CHud14SetHelpMessageEPKcPtbbbj");
+            if (!pfnSetHelpMessage6)
+            {
+                pfnSetHelpMessage5 = (SetHelpMessage5_t)aml->GetSym(g_pGTASA, "_ZN4CHud14SetHelpMessageEPKcPtbbb");
+                if (!pfnSetHelpMessage5)
+                {
+                    pfnSetHelpMessage4 = (SetHelpMessage4_t)aml->GetSym(g_pGTASA, "_ZN4CHud14SetHelpMessageEPtbbb");
+                }
+            }
+            Log("Symbol CHud::SetHelpMessage: %p", (void*)(pfnSetHelpMessage6 ? (void*)pfnSetHelpMessage6 : (pfnSetHelpMessage5 ? (void*)pfnSetHelpMessage5 : (void*)pfnSetHelpMessage4)));
+
+            // CMessages::AddMessageJumpQ (fallback)
+            pfnAddMessageJumpQ = (AddMessageJumpQ_t)aml->GetSym(g_pGTASA, "_ZN9CMessages15AddMessageJumpQEPKcPtjtb");
+            if (!pfnAddMessageJumpQ) pfnAddMessageJumpQ = (AddMessageJumpQ_t)aml->GetSym(g_pGTASA, "_ZN9CMessages15AddMessageJumpQEPKcjtb");
+            Log("Symbol CMessages::AddMessageJumpQ: %p", (void*)pfnAddMessageJumpQ);
 
             // CVehicle::Fix
             pfnVehicleFix = (VehicleFix_t)aml->GetSym(g_pGTASA, "_ZN8CVehicle3FixEv");
@@ -822,11 +856,7 @@ namespace AMLua
         }
         Log("----------------------------------------");
 
-        // Notify user about loaded scripts on startup
-        if (aml)
-        {
-            aml->ShowToast(false, "AMLua: %zu script(s) loaded. Double-tap top of screen to view list.", g_LoadedScripts.size());
-        }
+        Log("AMLua: %zu script(s) loaded successfully.", g_LoadedScripts.size());
     }
 
     static int  s_ActivePlayerFrames = 0;
@@ -846,7 +876,7 @@ namespace AMLua
                 if (s_ActivePlayerFrames >= 90)
                 {
                     s_InitialGreetingShown = true;
-                    std::string msg = "~y~AMLua 1.0.1 Active!~n~~w~" + std::to_string(g_LoadedScripts.size()) + " mod(s) loaded.~n~~g~Double-tap top-right for list.";
+                    std::string msg = "~y~AMLua Active!~n~~w~" + std::to_string(g_LoadedScripts.size()) + " mod(s) loaded.~n~~g~Double-tap top-right for list.";
                     DisplayHelpBox(msg.c_str(), 5000);
                 }
             }

@@ -3,7 +3,7 @@
 #include <string>
 
 // AML Plugin Metadata
-MYMOD(net.amlua.loader, AMLua, "1.0.1", "sunandar3221")
+MYMOD(net.amlua.loader, AMLua, "1.0.3", "sunandar3221")
 NEEDGAME(com.rockstargames.gtasa)
 
 uintptr_t g_pLibGTASA = 0;
@@ -90,7 +90,7 @@ extern "C" JNIEXPORT void OnModLoad()
     }
 
     AMLua::LoadScripts(scriptsDir.c_str());
-    logger->Info("AMLua 1.0.1 initialized and ready.");
+    logger->Info("AMLua 1.0.3 initialized and ready.");
 }
 
 extern "C" JNIEXPORT void OnModUnload()
