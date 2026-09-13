@@ -408,19 +408,19 @@ namespace AMLua
             // Call CHud::SetHelpMessage with safe parameters:
             // arg 1: nullptr (raw custom text, skip GXT key lookup so custom string is displayed)
             // arg 2: 16-bit GXT message pointer
-            // arg 3: bQuick = false
+            // arg 3: bQuick = true (allows calling PrintText repeatedly so new messages appear immediately)
             // arg 4: bDisplayForever = false
             // arg 5: bAddToBrief = true
             // arg 6: duration in ms (e.g. 3000)
-            pfnSetHelpMessage6(nullptr, gxtBuf, false, false, true, timeMs);
+            pfnSetHelpMessage6(nullptr, gxtBuf, true, false, true, timeMs);
         }
         else if (pfnSetHelpMessage5)
         {
-            pfnSetHelpMessage5(nullptr, gxtBuf, false, false, true);
+            pfnSetHelpMessage5(nullptr, gxtBuf, true, false, true);
         }
         else if (pfnSetHelpMessage4)
         {
-            pfnSetHelpMessage4(gxtBuf, false, false, true);
+            pfnSetHelpMessage4(gxtBuf, true, false, true);
         }
         else if (pfnAddMessageJumpQ)
         {
@@ -517,6 +517,98 @@ namespace AMLua
     static int Lua_ShowScriptList(lua_State* L)
     {
         ShowScriptListDialog();
+        return 0;
+    }
+
+    // Game.DoFile(path) / AMLua.DoFile(path)
+    // Allows calling/executing Lua scripts repeatedly from inside Lua scripts
+    static int Lua_Game_DoFile(lua_State* L)
+    {
+        const char* path = luaL_checkstring(L, 1);
+        std::string fullPath;
+        if (path[0] == '/')
+        {
+            fullPath = path;
+        }
+        else
+        {
+            fullPath = g_ScriptsDirPath + "/" + path;
+        }
+
+        lua_pushcfunction(L, Lua_TracebackHandler);
+        int errHandler = lua_gettop(L);
+
+        int status = luaL_loadfile(L, fullPath.c_str());
+        if (status != LUA_OK)
+        {
+            const char* err = lua_tostring(L, -1);
+            Log("[DoFile Error in %s]: %s", path, err ? err : "File not found or syntax error");
+            lua_pop(L, 2); // pop error and errHandler
+            lua_pushboolean(L, 0);
+            return 1;
+        }
+
+        status = lua_pcall(L, 0, LUA_MULTRET, errHandler);
+        if (status != LUA_OK)
+        {
+            const char* err = lua_tostring(L, -1);
+            Log("[DoFile Execution Error in %s]: %s", path, err ? err : "Runtime error");
+            lua_pop(L, 2); // pop error and errHandler
+            lua_pushboolean(L, 0);
+            return 1;
+        }
+
+        lua_remove(L, errHandler);
+        return lua_gettop(L) - (errHandler - 1);
+    }
+
+    // Game.RunString(code) / AMLua.RunString(code)
+    // Evaluates a Lua code string dynamically
+    static int Lua_Game_RunString(lua_State* L)
+    {
+        const char* code = luaL_checkstring(L, 1);
+
+        lua_pushcfunction(L, Lua_TracebackHandler);
+        int errHandler = lua_gettop(L);
+
+        int status = luaL_loadstring(L, code);
+        if (status != LUA_OK)
+        {
+            const char* err = lua_tostring(L, -1);
+            Log("[RunString Error]: %s", err ? err : "Syntax error");
+            lua_pop(L, 2);
+            lua_pushboolean(L, 0);
+            return 1;
+        }
+
+        status = lua_pcall(L, 0, LUA_MULTRET, errHandler);
+        if (status != LUA_OK)
+        {
+            const char* err = lua_tostring(L, -1);
+            Log("[RunString Execution Error]: %s", err ? err : "Runtime error");
+            lua_pop(L, 2);
+            lua_pushboolean(L, 0);
+            return 1;
+        }
+
+        lua_remove(L, errHandler);
+        return lua_gettop(L) - (errHandler - 1);
+    }
+
+    // Forward declaration of LoadScripts
+    void LoadScripts(const char* scriptsDir);
+
+    // Game.ReloadScripts() / AMLua.ReloadScripts()
+    // Reloads all Lua scripts on the fly
+    static int Lua_ReloadScripts(lua_State* L)
+    {
+        // Clear tick callbacks
+        lua_pushnil(L);
+        lua_setfield(L, LUA_REGISTRYINDEX, "AMLua_TickCallbacks");
+
+        LoadScripts(g_ScriptsDirPath.c_str());
+
+        DisplayHelpBox("~g~AMLua: Scripts Reloaded!", 3000);
         return 0;
     }
 
@@ -666,11 +758,17 @@ namespace AMLua
         lua_setfield(L, -2, "GetLoadedScripts");
         lua_pushcfunction(L, Lua_ShowScriptList);
         lua_setfield(L, -2, "ShowScriptList");
+        lua_pushcfunction(L, Lua_Game_DoFile);
+        lua_setfield(L, -2, "DoFile");
+        lua_pushcfunction(L, Lua_Game_RunString);
+        lua_setfield(L, -2, "RunString");
+        lua_pushcfunction(L, Lua_ReloadScripts);
+        lua_setfield(L, -2, "ReloadScripts");
         lua_setglobal(L, "Game");
 
         // Table: AMLua (contains version, mod list inspection, and direct module references)
         lua_newtable(L);
-        lua_pushstring(L, "1.0.1");
+        lua_pushstring(L, "1.0.3");
         lua_setfield(L, -2, "Version");
         lua_pushcfunction(L, Lua_RegisterTick);
         lua_setfield(L, -2, "OnTick");
@@ -682,6 +780,12 @@ namespace AMLua
         lua_setfield(L, -2, "PrintText");
         lua_pushcfunction(L, Lua_Game_PrintText);
         lua_setfield(L, -2, "ShowHelpMessage");
+        lua_pushcfunction(L, Lua_Game_DoFile);
+        lua_setfield(L, -2, "DoFile");
+        lua_pushcfunction(L, Lua_Game_RunString);
+        lua_setfield(L, -2, "RunString");
+        lua_pushcfunction(L, Lua_ReloadScripts);
+        lua_setfield(L, -2, "ReloadScripts");
 
         // Reference Player, Vehicle, Game inside AMLua as well
         lua_getglobal(L, "Player");
@@ -692,6 +796,10 @@ namespace AMLua
         lua_setfield(L, -2, "Game");
 
         lua_setglobal(L, "AMLua");
+
+        // Global dofile override so scripts can call dofile("myscript.lua") directly
+        lua_pushcfunction(L, Lua_Game_DoFile);
+        lua_setglobal(L, "dofile");
     }
 
     void Init(uintptr_t libGTASA)
@@ -764,6 +872,16 @@ namespace AMLua
         // Load standard Lua libraries
         luaL_openlibs(g_LuaState);
 
+        // Configure package.path so require() looks in scripts directory
+        std::string luaPath = g_ScriptsDirPath + "/?.lua;" + g_ScriptsDirPath + "/?/init.lua;./?.lua";
+        lua_getglobal(g_LuaState, "package");
+        if (lua_istable(g_LuaState, -1))
+        {
+            lua_pushstring(g_LuaState, luaPath.c_str());
+            lua_setfield(g_LuaState, -2, "path");
+        }
+        lua_pop(g_LuaState, 1);
+
         // Apply security sandboxing
         ApplySandbox(g_LuaState);
 
@@ -789,6 +907,16 @@ namespace AMLua
 
         g_ScriptsDirPath = scriptsDir;
         g_LoadedScripts.clear();
+
+        // Update package.path so require() always uses current scriptsDir
+        std::string luaPath = std::string(scriptsDir) + "/?.lua;" + std::string(scriptsDir) + "/?/init.lua;./?.lua";
+        lua_getglobal(g_LuaState, "package");
+        if (lua_istable(g_LuaState, -1))
+        {
+            lua_pushstring(g_LuaState, luaPath.c_str());
+            lua_setfield(g_LuaState, -2, "path");
+        }
+        lua_pop(g_LuaState, 1);
 
         Log("Scanning for scripts in: %s", scriptsDir);
 
@@ -873,11 +1001,11 @@ namespace AMLua
             if (IsValidGameObject(ped))
             {
                 s_ActivePlayerFrames++;
-                if (s_ActivePlayerFrames >= 90)
+                if (s_ActivePlayerFrames >= 30)
                 {
                     s_InitialGreetingShown = true;
-                    std::string msg = "~y~AMLua Active!~n~~w~" + std::to_string(g_LoadedScripts.size()) + " mod(s) loaded.~n~~g~Double-tap top-right for list.";
-                    DisplayHelpBox(msg.c_str(), 5000);
+                    std::string msg = "~y~AMLua Active!~n~~w~" + std::to_string(g_LoadedScripts.size()) + " script(s) loaded.~n~~g~Double-tap top-right for list.";
+                    DisplayHelpBox(msg.c_str(), 4500);
                 }
             }
             else
