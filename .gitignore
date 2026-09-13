@@ -1,0 +1,21 @@
+# Build artifacts
+build/
+CMakeFiles/
+CMakeCache.txt
+*.ninja*
+.ninja_deps
+.ninja_log
+
+# Object files
+*.o
+*.obj
+
+# Logs
+*.log
+amlua.log
+
+# IDE & Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
