@@ -5,7 +5,7 @@
 
 Game.Log("=== AMLua test.lua starting ===")
 
--- Inspect and print loaded scripts count
+-- Print list of loaded scripts to logcat / amlua.log
 local scripts = AMLua.GetLoadedScripts()
 Game.Log(string.format("AMLua test.lua loaded with %d active script(s):", #scripts))
 for i, name in ipairs(scripts) do
@@ -13,7 +13,6 @@ for i, name in ipairs(scripts) do
 end
 
 local frameCount = 0
-local greeted = false
 
 -- Register per-frame game loop tick callback
 Game.OnTick(function()
@@ -21,13 +20,6 @@ Game.OnTick(function()
 
     local ped = Player.GetPed()
     if ped ~= nil then
-        -- Once player ped is active in game, display welcome message safely
-        if not greeted then
-            greeted = true
-            Game.PrintText("AMLua Active! Double-tap top screen for Mod List.", 4000)
-            Game.Log("Player ped detected in-game. Initial greeting displayed.")
-        end
-
         -- Periodic condition check (~every 60 frames / 1 second)
         if frameCount % 60 == 0 then
             local currentHealth = Player.GetHealth(ped)
@@ -37,7 +29,8 @@ Game.OnTick(function()
             if currentHealth > 0.0 and currentHealth < 50.0 then
                 Player.SetHealth(ped, 100.0)
                 Player.SetArmour(ped, 100.0)
-                Game.PrintText("Health Restored to 100!", 2000)
+                -- Display in GTA SA top-right dialog box using GTA color formatting
+                Game.PrintText("~g~Health Restored to 100!~n~~w~AMLua Auto-Heal Active.", 3000)
                 Game.Log(string.format("Player HP restored from %.1f to 100.0", currentHealth))
             end
         end

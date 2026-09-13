@@ -84,15 +84,26 @@ Tabel global alternatif yang mencakup seluruh fungsi di atas (`AMLua.Player`, `A
 
 ## 📱 Cara Melihat Daftar Mod Lua di GTA SA
 
-Ada 2 cara praktis:
+AMLua menggunakan **dialog box native bawaan GTA San Andreas Android** (`CHud::SetHelpMessage`) yang tampil di **pojok kanan atas layar** (kotak hitam semi-transparan dengan teks khas GTA).
+
+Ada 2 cara membukanya:
 1. **Gesture Sentuh (In-Game):**
-   - Ketuk dua kali (**Double-Tap**) di **area atas layar** (dekat status bar / health bar).
-   - Atau tap dengan **2 jari** secara bersamaan di layar.
-   - Kotak dialog AMLua akan muncul menampilkan daftar seluruh mod Lua yang aktif dan lokasinya.
+   - **Double-Tap Pojok Kanan Atas:** Ketuk 2x di area pojok kanan atas (dekat ikon senjata / bar darah).
+   - **Double-Tap Bar Atas:** Ketuk 2x di bagian atas layar.
+   - **Swipe Down:** Usap layar dari atas ke bawah (seperti membuka menu CLEO).
+   - **Tap 2 Jari:** Sentuh layar dengan dua jari secara bersamaan.
+   - Kotak dialog pojok kanan atas akan langsung memunculkan daftar mod:
+     ```text
+     AMLua Mods (1):
+     1. test.lua
+     ```
 2. **Melalui Script Lua:**
    ```lua
-   -- Tampilkan dialog daftar script
+   -- Tampilkan dialog daftar mod di pojok kanan atas
    AMLua.ShowScriptList()
+
+   -- Menampilkan teks custom di dialog box pojok kanan atas (mendukung kode warna GTA):
+   Game.PrintText("~g~Misi Berhasil!~n~~w~AMLua siap digunakan.", 4000)
 
    -- Atau ambil daftarnya untuk diproses sendiri
    local mods = AMLua.GetLoadedScripts()

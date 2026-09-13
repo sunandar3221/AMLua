@@ -39,12 +39,17 @@ namespace AMLua
 
     // Function pointer types for resolved game symbols
     typedef void* (*FindPlayerPed_t)(int playerNum);
-    // CMessages::AddMessageJumpQ takes (const char* Label, GxtChar* pText, u32 Duration, u16 Colour, bool bAddToPrevBriefs)
-    typedef void  (*AddMessageJumpQ_t)(const char* label, unsigned short* pText, unsigned int duration, unsigned short flag, bool bAddToPrevBriefs);
+    // CMessages::AddMessageJumpQ takes (const char* text, unsigned short* pText, unsigned int duration, unsigned short flag, bool bAddToPrevBriefs)
+    typedef void  (*AddMessageJumpQ_t)(const char* text, unsigned short* pText, unsigned int duration, unsigned short flag, bool bAddToPrevBriefs);
+    // CHud::SetHelpMessage takes (const char* text, unsigned short* gxtText, bool quickMessage, bool permanent, bool addToBrief, unsigned int duration)
+    typedef void  (*SetHelpMessage_t)(const char* text, unsigned short* gxtText, bool quickMessage, bool permanent, bool addToBrief, unsigned int duration);
+    typedef void  (*AsciiToGxtChar_t)(const char* src, unsigned short* dst);
     typedef void  (*VehicleFix_t)(void* vehicle);
 
     static FindPlayerPed_t   pfnFindPlayerPed = nullptr;
     static AddMessageJumpQ_t pfnAddMessageJumpQ = nullptr;
+    static SetHelpMessage_t  pfnSetHelpMessage = nullptr;
+    static AsciiToGxtChar_t  pfnAsciiToGxtChar = nullptr;
     static VehicleFix_t      pfnVehicleFix = nullptr;
 
     const char* GetLogFilePath()
@@ -96,6 +101,11 @@ namespace AMLua
     static void ConvertToGxt(const char* src, unsigned short* dst, size_t maxChars)
     {
         if (!src || !dst || maxChars == 0) return;
+        if (pfnAsciiToGxtChar)
+        {
+            pfnAsciiToGxtChar(src, dst);
+            return;
+        }
         size_t i = 0;
         while (src[i] != '\0' && i < maxChars - 1)
         {
@@ -303,36 +313,41 @@ namespace AMLua
     // Lua API: Game / UI
     // ==========================================
 
-    // Game.PrintText(text, timeMs)
+    // Display text in GTA SA native top-right dialog box (CHud::SetHelpMessage)
+    void DisplayHelpBox(const char* text, unsigned int duration)
+    {
+        if (!text || text[0] == '\0') return;
+
+        unsigned short gxtBuf[512] = {0};
+        ConvertToGxt(text, gxtBuf, sizeof(gxtBuf) / sizeof(gxtBuf[0]));
+
+        // Display in GTA SA's built-in top-right help dialog box!
+        if (pfnSetHelpMessage)
+        {
+            pfnSetHelpMessage(text, gxtBuf, true, false, false, duration);
+        }
+
+        // Also display in CMessages subtitle queue
+        if (pfnAddMessageJumpQ)
+        {
+            pfnAddMessageJumpQ(text, gxtBuf, duration, 0, false);
+        }
+
+        Log("[DisplayHelpBox] %s", text);
+    }
+
+    // Game.PrintText(text, timeMs) / Game.ShowHelpMessage(text, timeMs)
     static int Lua_Game_PrintText(lua_State* L)
     {
         const char* text = luaL_checkstring(L, 1);
-        int timeMs = (int)luaL_optinteger(L, 2, 2000);
+        int timeMs = (int)luaL_optinteger(L, 2, 3000);
 
-        // Check if game world is active (player ped exists)
-        bool isGameActive = false;
-        if (pfnFindPlayerPed)
-        {
-            void* ped = pfnFindPlayerPed(-1);
-            if (IsValidGameObject(ped))
-            {
-                isGameActive = true;
-            }
-        }
+        DisplayHelpBox(text, (unsigned int)timeMs);
 
-        if (isGameActive && pfnAddMessageJumpQ)
+        if (aml)
         {
-            unsigned short gxtBuf[256];
-            ConvertToGxt(text, gxtBuf, sizeof(gxtBuf) / sizeof(gxtBuf[0]));
-            pfnAddMessageJumpQ(nullptr, gxtBuf, (unsigned int)timeMs, 0, false);
+            aml->ShowToast(false, "%s", text);
         }
-        else if (aml)
-        {
-            // Guaranteed safe anywhere (menus, loading screens, or gameplay)
-            aml->ShowToast(timeMs > 3000, "%s", text);
-        }
-
-        Log("[PrintText] %s", text);
         return 0;
     }
 
@@ -379,29 +394,34 @@ namespace AMLua
         return 1;
     }
 
-    // Show native dialog listing all loaded scripts
+    // Show native GTA SA top-right dialog box listing all loaded scripts
     void ShowScriptListDialog()
     {
-        std::string msg = "Active Lua Mods (" + std::to_string(g_LoadedScripts.size()) + "):\n\n";
+        std::string text = "~y~AMLua Mods (~w~" + std::to_string(g_LoadedScripts.size()) + "~y~):";
         if (g_LoadedScripts.empty())
         {
-            msg += "  (No .lua scripts found in scripts folder)\n";
+            text += "~n~~w~No .lua scripts found";
         }
         else
         {
-            for (size_t i = 0; i < g_LoadedScripts.size(); ++i)
+            for (size_t i = 0; i < g_LoadedScripts.size() && i < 8; ++i)
             {
-                msg += "  " + std::to_string(i + 1) + ". " + g_LoadedScripts[i] + "\n";
+                text += "~n~~w~" + std::to_string(i + 1) + ". " + g_LoadedScripts[i];
+            }
+            if (g_LoadedScripts.size() > 8)
+            {
+                text += "~n~~g~(+ " + std::to_string(g_LoadedScripts.size() - 8) + " more)";
             }
         }
-        msg += "\nScripts Path:\n" + g_ScriptsDirPath;
 
-        Log("Opening AMLua Script List Dialog:\n%s", msg.c_str());
+        Log("Showing Mod List in GTA SA Dialog:\n%s", text.c_str());
+
+        // Display in GTA SA's built-in top-right help dialog box
+        DisplayHelpBox(text.c_str(), 6000);
 
         if (aml)
         {
-            aml->ShowDialog("AMLua - Loaded Scripts", msg.c_str(), "OK");
-            aml->ShowToast(true, "AMLua: %zu script(s) loaded.", g_LoadedScripts.size());
+            aml->ShowToast(false, "AMLua: %zu script(s) loaded", g_LoadedScripts.size());
         }
     }
 
@@ -411,37 +431,70 @@ namespace AMLua
         return 0;
     }
 
-    // Touch event gesture detection: Double-tap top of screen or two-finger tap to show mod list
+    // Touch event gesture detection:
+    // 1. Double-tap in top-right area (near weapon/health HUD)
+    // 2. Double-tap on top status bar
+    // 3. Swipe down from top (classic CLEO swipe)
+    // 4. Two-finger tap
     void OnTouchEvent(int actionType, int trackNum, int x, int y)
     {
-        // actionType: 0 = DOWN, 1 = MOVE, 2 = UP
-        if (actionType == 0) // Touch DOWN
-        {
-            // Check if touch is near top of screen (y < 200)
-            if (y < 200)
-            {
-                static clock_t lastTopTapClock = 0;
-                clock_t curClock = clock();
-                double elapsedMs = (double)(curClock - lastTopTapClock) * 1000.0 / CLOCKS_PER_SEC;
-                lastTopTapClock = curClock;
+        static int s_MaxX = 1280;
+        static int s_MaxY = 720;
+        if (x > s_MaxX) s_MaxX = x;
+        if (y > s_MaxY) s_MaxY = y;
 
-                if (elapsedMs < 600.0 && elapsedMs > 50.0)
-                {
-                    // Double-tap detected on top of screen!
-                    ShowScriptListDialog();
-                }
-            }
-            else if (trackNum >= 1)
+        static int startX = 0;
+        static int startY = 0;
+        static clock_t startTime = 0;
+        static clock_t lastTapClock = 0;
+
+        // actionType: 0 = DOWN, 1 = MOVE, 2 = UP
+        if (actionType == 0) // DOWN
+        {
+            startX = x;
+            startY = y;
+            startTime = clock();
+
+            clock_t curClock = clock();
+            double elapsedMs = (double)(curClock - lastTapClock) * 1000.0 / CLOCKS_PER_SEC;
+            lastTapClock = curClock;
+
+            // Check if touch is near top-right corner (where weapon/health HUD is)
+            bool isTopRight = (x > (int)(s_MaxX * 0.55f) && y < (int)(s_MaxY * 0.40f));
+            // Or top status bar
+            bool isTopBar = (y < (int)(s_MaxY * 0.25f));
+
+            if ((isTopRight || isTopBar) && elapsedMs < 650.0 && elapsedMs > 40.0)
             {
-                // Two-finger tap
+                // Double tap detected!
+                ShowScriptListDialog();
+                return;
+            }
+
+            // Two-finger tap
+            if (trackNum >= 1)
+            {
                 static clock_t lastTwoFingerClock = 0;
-                clock_t curClock = clock();
-                double elapsedMs = (double)(curClock - lastTwoFingerClock) * 1000.0 / CLOCKS_PER_SEC;
-                if (elapsedMs > 1200.0)
+                double tfElapsed = (double)(curClock - lastTwoFingerClock) * 1000.0 / CLOCKS_PER_SEC;
+                if (tfElapsed > 1000.0)
                 {
                     lastTwoFingerClock = curClock;
                     ShowScriptListDialog();
+                    return;
                 }
+            }
+        }
+        else if (actionType == 2) // UP
+        {
+            // Swipe down from top (start y < 30% height, swipe down > 18% height, vertical)
+            clock_t curClock = clock();
+            double swipeDuration = (double)(curClock - startTime) * 1000.0 / CLOCKS_PER_SEC;
+            int dx = abs(x - startX);
+            int dy = y - startY;
+            if (startY < (int)(s_MaxY * 0.30f) && dy > (int)(s_MaxY * 0.18f) && dx < (int)(s_MaxX * 0.25f) && swipeDuration < 800.0)
+            {
+                ShowScriptListDialog();
+                return;
             }
         }
     }
@@ -514,6 +567,8 @@ namespace AMLua
         lua_newtable(L);
         lua_pushcfunction(L, Lua_Game_PrintText);
         lua_setfield(L, -2, "PrintText");
+        lua_pushcfunction(L, Lua_Game_PrintText);
+        lua_setfield(L, -2, "ShowHelpMessage");
         lua_pushcfunction(L, Lua_Game_Log);
         lua_setfield(L, -2, "Log");
         lua_pushcfunction(L, Lua_RegisterTick);
@@ -526,7 +581,7 @@ namespace AMLua
 
         // Table: AMLua (contains version, mod list inspection, and direct module references)
         lua_newtable(L);
-        lua_pushstring(L, "1.0");
+        lua_pushstring(L, "1.0.1");
         lua_setfield(L, -2, "Version");
         lua_pushcfunction(L, Lua_RegisterTick);
         lua_setfield(L, -2, "OnTick");
@@ -534,6 +589,10 @@ namespace AMLua
         lua_setfield(L, -2, "GetLoadedScripts");
         lua_pushcfunction(L, Lua_ShowScriptList);
         lua_setfield(L, -2, "ShowScriptList");
+        lua_pushcfunction(L, Lua_Game_PrintText);
+        lua_setfield(L, -2, "PrintText");
+        lua_pushcfunction(L, Lua_Game_PrintText);
+        lua_setfield(L, -2, "ShowHelpMessage");
 
         // Reference Player, Vehicle, Game inside AMLua as well
         lua_getglobal(L, "Player");
@@ -576,6 +635,20 @@ namespace AMLua
             pfnFindPlayerPed = (FindPlayerPed_t)aml->GetSym(g_pGTASA, "_Z13FindPlayerPedi");
             if (!pfnFindPlayerPed) pfnFindPlayerPed = (FindPlayerPed_t)aml->GetSym(g_pGTASA, "FindPlayerPed");
             Log("Symbol FindPlayerPed: %p", (void*)pfnFindPlayerPed);
+
+            // CHud::SetHelpMessage (GTA SA native top-right dialog box)
+            pfnSetHelpMessage = (SetHelpMessage_t)aml->GetSym(g_pGTASA, "_ZN4CHud14SetHelpMessageEPKcPtbbbj");
+            if (!pfnSetHelpMessage) pfnSetHelpMessage = (SetHelpMessage_t)aml->GetSym(g_pGTASA, "_ZN4CHud14SetHelpMessageEPKcPtbbj");
+            if (!pfnSetHelpMessage) pfnSetHelpMessage = (SetHelpMessage_t)aml->GetSym(g_pGTASA, "_ZN4CHud14SetHelpMessageEPKcPtbbb");
+            if (!pfnSetHelpMessage) pfnSetHelpMessage = (SetHelpMessage_t)aml->GetSym(g_pGTASA, "_ZN4CHud14SetHelpMessageEPKcbbbj");
+            if (!pfnSetHelpMessage) pfnSetHelpMessage = (SetHelpMessage_t)aml->GetSym(g_pGTASA, "_ZN4CHud14SetHelpMessageEPKctbbj");
+            if (!pfnSetHelpMessage) pfnSetHelpMessage = (SetHelpMessage_t)aml->GetSym(g_pGTASA, "_ZN4CHud14SetHelpMessageEPKcb");
+            Log("Symbol CHud::SetHelpMessage: %p", (void*)pfnSetHelpMessage);
+
+            // AsciiToGxtChar
+            pfnAsciiToGxtChar = (AsciiToGxtChar_t)aml->GetSym(g_pGTASA, "_Z14AsciiToGxtCharPKcPt");
+            if (!pfnAsciiToGxtChar) pfnAsciiToGxtChar = (AsciiToGxtChar_t)aml->GetSym(g_pGTASA, "AsciiToGxtChar");
+            Log("Symbol AsciiToGxtChar: %p", (void*)pfnAsciiToGxtChar);
 
             // CMessages::AddMessageJumpQ
             pfnAddMessageJumpQ = (AddMessageJumpQ_t)aml->GetSym(g_pGTASA, "_ZN9CMessages15AddMessageJumpQEPKcPtjtb");
@@ -698,9 +771,23 @@ namespace AMLua
         }
     }
 
+    static bool s_InitialGreetingShown = false;
+
     void ProcessTick()
     {
         if (!g_LuaState) return;
+
+        // Display initial greeting dialog once player spawns in game world
+        if (!s_InitialGreetingShown && pfnFindPlayerPed)
+        {
+            void* ped = pfnFindPlayerPed(-1);
+            if (IsValidGameObject(ped))
+            {
+                s_InitialGreetingShown = true;
+                std::string msg = "~y~AMLua 1.0.1 Active!~n~~w~" + std::to_string(g_LoadedScripts.size()) + " mod(s) loaded.~n~~g~Double-tap top-right for list.";
+                DisplayHelpBox(msg.c_str(), 5000);
+            }
+        }
 
         lua_pushcfunction(g_LuaState, Lua_TracebackHandler);
         int errHandler = lua_gettop(g_LuaState);

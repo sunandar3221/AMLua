@@ -31,6 +31,9 @@ namespace AMLua
     // Return current log file path
     const char* GetLogFilePath();
 
+    // Display text in GTA SA native top-right dialog box (CHud::SetHelpMessage)
+    void DisplayHelpBox(const char* text, unsigned int duration = 4000);
+
     // Show native dialog listing all loaded Lua mods
     void ShowScriptListDialog();
 
