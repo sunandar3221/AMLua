@@ -383,8 +383,16 @@ namespace AMLua
         }
 
         // GTA SA help message string: 16-bit GxtChar buffer (max 256 chars)
-        unsigned short gxtBuf[256] = {0};
-        ConvertToGxt(text, gxtBuf, sizeof(gxtBuf) / sizeof(gxtBuf[0]));
+        // Static array because CHud::SetHelpMessage only stores the pointer, it doesn't copy the text.
+        // A stack variable would be destroyed before CHud::Draw is called next frame, causing a crash.
+        // We use a small circular buffer of arrays just in case multiple messages are triggered.
+        static unsigned short gxtBufs[4][256] = {0};
+        static int bufIdx = 0;
+        bufIdx = (bufIdx + 1) % 4;
+        unsigned short* gxtBuf = gxtBufs[bufIdx];
+        
+        memset(gxtBuf, 0, sizeof(gxtBufs[0]));
+        ConvertToGxt(text, gxtBuf, 256);
 
         // Call CHud::SetHelpMessage with safe parameters:
         // arg 1: short label <= 7 chars (e.g. "AML") to prevent 8-byte buffer overrun
