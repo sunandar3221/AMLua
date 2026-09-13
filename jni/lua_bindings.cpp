@@ -9,6 +9,8 @@
 #include <time.h>
 #include <sys/stat.h>
 #include <dirent.h>
+#include <unistd.h>
+#include <errno.h>
 #include <vector>
 #include <string>
 #include <algorithm>
@@ -39,17 +41,12 @@ namespace AMLua
 
     // Function pointer types for resolved game symbols
     typedef void* (*FindPlayerPed_t)(int playerNum);
-    // CMessages::AddMessageJumpQ takes (const char* text, unsigned short* pText, unsigned int duration, unsigned short flag, bool bAddToPrevBriefs)
-    typedef void  (*AddMessageJumpQ_t)(const char* text, unsigned short* pText, unsigned int duration, unsigned short flag, bool bAddToPrevBriefs);
-    // CHud::SetHelpMessage takes (const char* text, unsigned short* gxtText, bool quickMessage, bool permanent, bool addToBrief, unsigned int duration)
-    typedef void  (*SetHelpMessage_t)(const char* text, unsigned short* gxtText, bool quickMessage, bool permanent, bool addToBrief, unsigned int duration);
-    typedef void  (*AsciiToGxtChar_t)(const char* src, unsigned short* dst);
+    // CHud::SetHelpMessage takes (const char* helpLabel, unsigned short* gxtText, bool quickMessage, bool permanent, bool addToBrief, unsigned int nConditionFlag)
+    typedef void  (*SetHelpMessage_t)(const char* helpLabel, unsigned short* gxtText, bool quickMessage, bool permanent, bool addToBrief, unsigned int nConditionFlag);
     typedef void  (*VehicleFix_t)(void* vehicle);
 
     static FindPlayerPed_t   pfnFindPlayerPed = nullptr;
-    static AddMessageJumpQ_t pfnAddMessageJumpQ = nullptr;
     static SetHelpMessage_t  pfnSetHelpMessage = nullptr;
-    static AsciiToGxtChar_t  pfnAsciiToGxtChar = nullptr;
     static VehicleFix_t      pfnVehicleFix = nullptr;
 
     const char* GetLogFilePath()
@@ -101,11 +98,6 @@ namespace AMLua
     static void ConvertToGxt(const char* src, unsigned short* dst, size_t maxChars)
     {
         if (!src || !dst || maxChars == 0) return;
-        if (pfnAsciiToGxtChar)
-        {
-            pfnAsciiToGxtChar(src, dst);
-            return;
-        }
         size_t i = 0;
         while (src[i] != '\0' && i < maxChars - 1)
         {
@@ -113,6 +105,10 @@ namespace AMLua
             ++i;
         }
         dst[i] = 0;
+        if (i + 1 < maxChars)
+        {
+            dst[i + 1] = 0;
+        }
     }
 
     // Traceback error handler for protected lua_pcall
@@ -134,25 +130,36 @@ namespace AMLua
         return 1;
     }
 
-    // Verify pointer memory safety to avoid dereferencing garbage or dying game entities
-    inline bool IsValidGameObject(void* ptr)
+    // Verify memory readability via kernel syscall check to avoid SIGSEGV
+    inline bool IsValidMemory(const void* ptr, size_t size)
     {
         if (!ptr) return false;
         uintptr_t addr = (uintptr_t)ptr;
+
         #ifdef AML32
         if (addr < 0x10000 || addr >= 0xFFFFF000) return false;
         #else
         if (addr < 0x10000 || addr >= 0x00007FFFFFFFFFFFULL) return false;
         #endif
 
-        // Verify vtable pointer is non-null and valid address
+        if ((addr % sizeof(void*)) != 0) return false;
+
+        // write(-1, ptr, size) asks the kernel to validate the user buffer without segfaulting
+        if (write(-1, ptr, size) < 0 && errno == EFAULT)
+        {
+            return false;
+        }
+        return true;
+    }
+
+    // Verify pointer memory safety to avoid dereferencing garbage or dying game entities
+    inline bool IsValidGameObject(void* ptr)
+    {
+        if (!IsValidMemory(ptr, sizeof(void*))) return false;
+
+        // Verify vtable pointer is readable and valid
         uintptr_t vtable = *(uintptr_t*)ptr;
-        if (!vtable) return false;
-        #ifdef AML32
-        if (vtable < 0x10000 || vtable >= 0xFFFFF000) return false;
-        #else
-        if (vtable < 0x10000 || vtable >= 0x00007FFFFFFFFFFFULL) return false;
-        #endif
+        if (!IsValidMemory((void*)vtable, sizeof(void*))) return false;
 
         return true;
     }
@@ -208,8 +215,17 @@ namespace AMLua
             return 0; // Silently and safely ignore if invalid
         }
 
+        void* pHealth = (void*)((uintptr_t)ped + OFF_PED_HEALTH);
+        if (!IsValidMemory(pHealth, sizeof(float)))
+        {
+            return 0;
+        }
+
         float hp = (float)luaL_checknumber(L, 2);
-        *(float*)((uintptr_t)ped + OFF_PED_HEALTH) = hp;
+        if (hp < 0.0f) hp = 0.0f;
+        if (hp > 1000.0f) hp = 1000.0f;
+
+        *(float*)pHealth = hp;
         return 0;
     }
 
@@ -223,7 +239,14 @@ namespace AMLua
             return 1;
         }
 
-        float hp = *(float*)((uintptr_t)ped + OFF_PED_HEALTH);
+        void* pHealth = (void*)((uintptr_t)ped + OFF_PED_HEALTH);
+        if (!IsValidMemory(pHealth, sizeof(float)))
+        {
+            lua_pushnumber(L, 0.0);
+            return 1;
+        }
+
+        float hp = *(float*)pHealth;
         lua_pushnumber(L, (lua_Number)hp);
         return 1;
     }
@@ -237,8 +260,17 @@ namespace AMLua
             return 0;
         }
 
+        void* pArmour = (void*)((uintptr_t)ped + OFF_PED_ARMOUR);
+        if (!IsValidMemory(pArmour, sizeof(float)))
+        {
+            return 0;
+        }
+
         float armour = (float)luaL_checknumber(L, 2);
-        *(float*)((uintptr_t)ped + OFF_PED_ARMOUR) = armour;
+        if (armour < 0.0f) armour = 0.0f;
+        if (armour > 1000.0f) armour = 1000.0f;
+
+        *(float*)pArmour = armour;
         return 0;
     }
 
@@ -252,7 +284,14 @@ namespace AMLua
             return 1;
         }
 
-        float armour = *(float*)((uintptr_t)ped + OFF_PED_ARMOUR);
+        void* pArmour = (void*)((uintptr_t)ped + OFF_PED_ARMOUR);
+        if (!IsValidMemory(pArmour, sizeof(float)))
+        {
+            lua_pushnumber(L, 0.0);
+            return 1;
+        }
+
+        float armour = *(float*)pArmour;
         lua_pushnumber(L, (lua_Number)armour);
         return 1;
     }
@@ -275,8 +314,11 @@ namespace AMLua
             pfnVehicleFix(veh);
         }
 
-        // Set vehicle health to 1000.0f (full health)
-        *(float*)((uintptr_t)veh + OFF_VEH_HEALTH) = 1000.0f;
+        void* pVehHealth = (void*)((uintptr_t)veh + OFF_VEH_HEALTH);
+        if (IsValidMemory(pVehHealth, sizeof(float)))
+        {
+            *(float*)pVehHealth = 1000.0f;
+        }
         return 0;
     }
 
@@ -290,7 +332,14 @@ namespace AMLua
             return 1;
         }
 
-        float hp = *(float*)((uintptr_t)veh + OFF_VEH_HEALTH);
+        void* pVehHealth = (void*)((uintptr_t)veh + OFF_VEH_HEALTH);
+        if (!IsValidMemory(pVehHealth, sizeof(float)))
+        {
+            lua_pushnumber(L, 0.0);
+            return 1;
+        }
+
+        float hp = *(float*)pVehHealth;
         lua_pushnumber(L, (lua_Number)hp);
         return 1;
     }
@@ -304,8 +353,17 @@ namespace AMLua
             return 0;
         }
 
+        void* pVehHealth = (void*)((uintptr_t)veh + OFF_VEH_HEALTH);
+        if (!IsValidMemory(pVehHealth, sizeof(float)))
+        {
+            return 0;
+        }
+
         float hp = (float)luaL_checknumber(L, 2);
-        *(float*)((uintptr_t)veh + OFF_VEH_HEALTH) = hp;
+        if (hp < 0.0f) hp = 0.0f;
+        if (hp > 2000.0f) hp = 2000.0f;
+
+        *(float*)pVehHealth = hp;
         return 0;
     }
 
@@ -318,20 +376,24 @@ namespace AMLua
     {
         if (!text || text[0] == '\0') return;
 
-        unsigned short gxtBuf[512] = {0};
+        if (!pfnSetHelpMessage)
+        {
+            Log("[DisplayHelpBox] pfnSetHelpMessage is not available");
+            return;
+        }
+
+        // GTA SA help message string: 16-bit GxtChar buffer (max 256 chars)
+        unsigned short gxtBuf[256] = {0};
         ConvertToGxt(text, gxtBuf, sizeof(gxtBuf) / sizeof(gxtBuf[0]));
 
-        // Display in GTA SA's built-in top-right help dialog box!
-        if (pfnSetHelpMessage)
-        {
-            pfnSetHelpMessage(text, gxtBuf, true, false, false, duration);
-        }
-
-        // Also display in CMessages subtitle queue
-        if (pfnAddMessageJumpQ)
-        {
-            pfnAddMessageJumpQ(text, gxtBuf, duration, 0, false);
-        }
+        // Call CHud::SetHelpMessage with safe parameters:
+        // arg 1: short label <= 7 chars (e.g. "AML") to prevent 8-byte buffer overrun
+        // arg 2: 16-bit GXT message pointer
+        // arg 3: bQuick = true
+        // arg 4: bDisplayForever = false
+        // arg 5: bAddToBrief = false
+        // arg 6: nConditionFlag = 0 (MUST BE 0; NOT duration)
+        pfnSetHelpMessage("AML", gxtBuf, true, false, false, 0);
 
         Log("[DisplayHelpBox] %s", text);
     }
@@ -637,23 +699,11 @@ namespace AMLua
             Log("Symbol FindPlayerPed: %p", (void*)pfnFindPlayerPed);
 
             // CHud::SetHelpMessage (GTA SA native top-right dialog box)
+            // void CHud::SetHelpMessage(const char* helpLabel, unsigned short* pHelpMsg, bool bQuick, bool bDisplayForever, bool bAddToBrief, unsigned int nConditionFlag)
             pfnSetHelpMessage = (SetHelpMessage_t)aml->GetSym(g_pGTASA, "_ZN4CHud14SetHelpMessageEPKcPtbbbj");
             if (!pfnSetHelpMessage) pfnSetHelpMessage = (SetHelpMessage_t)aml->GetSym(g_pGTASA, "_ZN4CHud14SetHelpMessageEPKcPtbbj");
             if (!pfnSetHelpMessage) pfnSetHelpMessage = (SetHelpMessage_t)aml->GetSym(g_pGTASA, "_ZN4CHud14SetHelpMessageEPKcPtbbb");
-            if (!pfnSetHelpMessage) pfnSetHelpMessage = (SetHelpMessage_t)aml->GetSym(g_pGTASA, "_ZN4CHud14SetHelpMessageEPKcbbbj");
-            if (!pfnSetHelpMessage) pfnSetHelpMessage = (SetHelpMessage_t)aml->GetSym(g_pGTASA, "_ZN4CHud14SetHelpMessageEPKctbbj");
-            if (!pfnSetHelpMessage) pfnSetHelpMessage = (SetHelpMessage_t)aml->GetSym(g_pGTASA, "_ZN4CHud14SetHelpMessageEPKcb");
             Log("Symbol CHud::SetHelpMessage: %p", (void*)pfnSetHelpMessage);
-
-            // AsciiToGxtChar
-            pfnAsciiToGxtChar = (AsciiToGxtChar_t)aml->GetSym(g_pGTASA, "_Z14AsciiToGxtCharPKcPt");
-            if (!pfnAsciiToGxtChar) pfnAsciiToGxtChar = (AsciiToGxtChar_t)aml->GetSym(g_pGTASA, "AsciiToGxtChar");
-            Log("Symbol AsciiToGxtChar: %p", (void*)pfnAsciiToGxtChar);
-
-            // CMessages::AddMessageJumpQ
-            pfnAddMessageJumpQ = (AddMessageJumpQ_t)aml->GetSym(g_pGTASA, "_ZN9CMessages15AddMessageJumpQEPKcPtjtb");
-            if (!pfnAddMessageJumpQ) pfnAddMessageJumpQ = (AddMessageJumpQ_t)aml->GetSym(g_pGTASA, "_ZN9CMessages15AddMessageJumpQEPKcjtb");
-            Log("Symbol CMessages::AddMessageJumpQ: %p", (void*)pfnAddMessageJumpQ);
 
             // CVehicle::Fix
             pfnVehicleFix = (VehicleFix_t)aml->GetSym(g_pGTASA, "_ZN8CVehicle3FixEv");
@@ -771,21 +821,30 @@ namespace AMLua
         }
     }
 
+    static int  s_ActivePlayerFrames = 0;
     static bool s_InitialGreetingShown = false;
 
     void ProcessTick()
     {
         if (!g_LuaState) return;
 
-        // Display initial greeting dialog once player spawns in game world
+        // Display initial greeting dialog once player is active and world is stabilized (~90 frames / 3 seconds)
         if (!s_InitialGreetingShown && pfnFindPlayerPed)
         {
             void* ped = pfnFindPlayerPed(-1);
             if (IsValidGameObject(ped))
             {
-                s_InitialGreetingShown = true;
-                std::string msg = "~y~AMLua 1.0.1 Active!~n~~w~" + std::to_string(g_LoadedScripts.size()) + " mod(s) loaded.~n~~g~Double-tap top-right for list.";
-                DisplayHelpBox(msg.c_str(), 5000);
+                s_ActivePlayerFrames++;
+                if (s_ActivePlayerFrames >= 90)
+                {
+                    s_InitialGreetingShown = true;
+                    std::string msg = "~y~AMLua 1.0.1 Active!~n~~w~" + std::to_string(g_LoadedScripts.size()) + " mod(s) loaded.~n~~g~Double-tap top-right for list.";
+                    DisplayHelpBox(msg.c_str(), 5000);
+                }
+            }
+            else
+            {
+                s_ActivePlayerFrames = 0;
             }
         }
 

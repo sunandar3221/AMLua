@@ -13,25 +13,30 @@ for i, name in ipairs(scripts) do
 end
 
 local frameCount = 0
+local healCooldown = 0
 
 -- Register per-frame game loop tick callback
 Game.OnTick(function()
     frameCount = frameCount + 1
+    if healCooldown > 0 then
+        healCooldown = healCooldown - 1
+    end
 
     local ped = Player.GetPed()
     if ped ~= nil then
-        -- Periodic condition check (~every 60 frames / 1 second)
-        if frameCount % 60 == 0 then
+        -- Periodic condition check (~every 30 frames / 0.5 second)
+        if frameCount % 30 == 0 and healCooldown == 0 then
             local currentHealth = Player.GetHealth(ped)
-            local currentArmour = Player.GetArmour(ped)
 
-            -- Auto-restore health if injured
+            -- Auto-restore health if injured (below 50 HP)
             if currentHealth > 0.0 and currentHealth < 50.0 then
                 Player.SetHealth(ped, 100.0)
                 Player.SetArmour(ped, 100.0)
-                -- Display in GTA SA top-right dialog box using GTA color formatting
+                healCooldown = 150 -- Cooldown for 5 seconds (~150 frames)
+
+                -- Display in GTA SA native top-right dialog box
                 Game.PrintText("~g~Health Restored to 100!~n~~w~AMLua Auto-Heal Active.", 3000)
-                Game.Log(string.format("Player HP restored from %.1f to 100.0", currentHealth))
+                Game.Log(string.format("Player HP restored from %.1f to 100.0 (Armour set to 100.0)", currentHealth))
             end
         end
 
