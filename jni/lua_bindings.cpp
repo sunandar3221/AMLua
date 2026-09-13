@@ -1,4 +1,5 @@
 #include "lua_bindings.h"
+#include "crash_handler.h"
 #include <mod/aml.h>
 
 #include <android/log.h>
@@ -136,6 +137,11 @@ namespace AMLua
             }
         }
         luaL_traceback(L, L, msg, 1);
+        const char* traceback = lua_tostring(L, -1);
+        if (traceback)
+        {
+            CrashHandler::LogError("[Lua Runtime Error]: %s", traceback);
+        }
         return 1;
     }
 
@@ -543,16 +549,21 @@ namespace AMLua
         {
             const char* err = lua_tostring(L, -1);
             Log("[DoFile Error in %s]: %s", path, err ? err : "File not found or syntax error");
+            CrashHandler::LogError("[DoFile Load Error in %s]: %s", path, err ? err : "File not found or syntax error");
             lua_pop(L, 2); // pop error and errHandler
             lua_pushboolean(L, 0);
             return 1;
         }
 
+        CrashHandler::SetCurrentScript(path);
+        CrashHandler::SetCurrentAction("DoFile Execution");
         status = lua_pcall(L, 0, LUA_MULTRET, errHandler);
+        CrashHandler::ClearContext();
         if (status != LUA_OK)
         {
             const char* err = lua_tostring(L, -1);
             Log("[DoFile Execution Error in %s]: %s", path, err ? err : "Runtime error");
+            CrashHandler::LogError("[DoFile Execution Error in %s]: %s", path, err ? err : "Runtime error");
             lua_pop(L, 2); // pop error and errHandler
             lua_pushboolean(L, 0);
             return 1;
@@ -576,16 +587,21 @@ namespace AMLua
         {
             const char* err = lua_tostring(L, -1);
             Log("[RunString Error]: %s", err ? err : "Syntax error");
+            CrashHandler::LogError("[RunString Syntax Error]: %s", err ? err : "Syntax error");
             lua_pop(L, 2);
             lua_pushboolean(L, 0);
             return 1;
         }
 
+        CrashHandler::SetCurrentScript("RunString");
+        CrashHandler::SetCurrentAction("Dynamic Code Execution");
         status = lua_pcall(L, 0, LUA_MULTRET, errHandler);
+        CrashHandler::ClearContext();
         if (status != LUA_OK)
         {
             const char* err = lua_tostring(L, -1);
             Log("[RunString Execution Error]: %s", err ? err : "Runtime error");
+            CrashHandler::LogError("[RunString Execution Error]: %s", err ? err : "Runtime error");
             lua_pop(L, 2);
             lua_pushboolean(L, 0);
             return 1;
@@ -954,6 +970,9 @@ namespace AMLua
             Log("----------------------------------------");
             Log("Loading script: %s", fileName.c_str());
 
+            CrashHandler::SetCurrentScript(fileName.c_str());
+            CrashHandler::SetCurrentAction("Script Execution (Startup)");
+
             // Push traceback error handler
             lua_pushcfunction(g_LuaState, Lua_TracebackHandler);
             int errHandler = lua_gettop(g_LuaState);
@@ -966,6 +985,7 @@ namespace AMLua
                 {
                     const char* err = lua_tostring(g_LuaState, -1);
                     Log("[Script Error in %s]:\n%s", fileName.c_str(), err ? err : "Unknown execution error");
+                    CrashHandler::LogError("[Script Error in %s]:\n%s", fileName.c_str(), err ? err : "Unknown execution error");
                     lua_pop(g_LuaState, 1);
                 }
                 else
@@ -977,10 +997,12 @@ namespace AMLua
             {
                 const char* err = lua_tostring(g_LuaState, -1);
                 Log("[Compilation Error in %s]:\n%s", fileName.c_str(), err ? err : "Syntax/Load error");
+                CrashHandler::LogError("[Compilation Error in %s]:\n%s", fileName.c_str(), err ? err : "Syntax/Load error");
                 lua_pop(g_LuaState, 1);
             }
 
             lua_pop(g_LuaState, 1); // remove errHandler
+            CrashHandler::ClearContext();
         }
         Log("----------------------------------------");
 
@@ -1014,6 +1036,8 @@ namespace AMLua
             }
         }
 
+        CrashHandler::SetCurrentAction("Processing Tick Callbacks");
+
         lua_pushcfunction(g_LuaState, Lua_TracebackHandler);
         int errHandler = lua_gettop(g_LuaState);
 
@@ -1026,10 +1050,15 @@ namespace AMLua
                 lua_rawgeti(g_LuaState, -1, i);
                 if (lua_isfunction(g_LuaState, -1))
                 {
+                    char actBuf[64];
+                    snprintf(actBuf, sizeof(actBuf), "Tick Callback #%d", i);
+                    CrashHandler::SetCurrentAction(actBuf);
+
                     if (lua_pcall(g_LuaState, 0, 0, errHandler) != LUA_OK)
                     {
                         const char* err = lua_tostring(g_LuaState, -1);
                         Log("[Tick Callback Error #%d]:\n%s", i, err ? err : "Unknown tick error");
+                        CrashHandler::LogError("[Tick Callback Error #%d]:\n%s", i, err ? err : "Unknown tick error");
                         lua_pop(g_LuaState, 1);
                     }
                 }
@@ -1041,5 +1070,7 @@ namespace AMLua
         }
         lua_pop(g_LuaState, 1); // pop callbacks table
         lua_pop(g_LuaState, 1); // pop errHandler
+
+        CrashHandler::ClearContext();
     }
 }

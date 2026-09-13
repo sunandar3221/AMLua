@@ -22,3 +22,7 @@ amlua.log
 
 # Distribution packages
 dist/
+
+# Root release binaries and archives
+/libAMLua*.so
+*.zip

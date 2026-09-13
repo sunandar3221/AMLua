@@ -1,9 +1,10 @@
 #include <mod/aml.h>
 #include "lua_bindings.h"
+#include "crash_handler.h"
 #include <string>
 
 // AML Plugin Metadata
-MYMOD(net.amlua.loader, AMLua, "1.0.3", "sunandar3221")
+MYMOD(net.amlua.loader, AMLua, "1.0.4", "sunandar3221")
 NEEDGAME(com.rockstargames.gtasa)
 
 uintptr_t g_pLibGTASA = 0;
@@ -36,9 +37,21 @@ extern "C" JNIEXPORT void OnModLoad()
 {
     logger->SetTag("AMLua");
     logger->Info("==========================================");
-    logger->Info("AMLua: Android Mod Lua Script Loader 1.0.1");
+    logger->Info("AMLua: Android Mod Lua Script Loader 1.0.4");
     logger->Info("Initializing plugin for GTA San Andreas");
     logger->Info("==========================================");
+
+    // Install signal crash handler early
+    std::string filesDir = "/storage/emulated/0/Android/data/com.rockstargames.gtasa/files";
+    if (aml)
+    {
+        const char* amlDataPath = aml->GetAndroidDataPath();
+        if (amlDataPath && amlDataPath[0] != '\0')
+        {
+            filesDir = amlDataPath;
+        }
+    }
+    AMLua::CrashHandler::Install(filesDir.c_str());
 
     // Get libGTASA.so library handle
     g_pLibGTASA = aml->GetLib("libGTASA.so");
@@ -90,11 +103,12 @@ extern "C" JNIEXPORT void OnModLoad()
     }
 
     AMLua::LoadScripts(scriptsDir.c_str());
-    logger->Info("AMLua 1.0.3 initialized and ready.");
+    logger->Info("AMLua 1.0.4 initialized and ready.");
 }
 
 extern "C" JNIEXPORT void OnModUnload()
 {
     logger->Info("AMLua unloading...");
+    AMLua::CrashHandler::Uninstall();
     AMLua::Shutdown();
 }

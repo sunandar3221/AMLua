@@ -5,10 +5,15 @@
 [![Platform](https://img.shields.io/badge/Platform-Android-green.svg)](https://android.com)
 [![Architecture](https://img.shields.io/badge/Arch-arm64--v8a%20%7C%20armeabi--v7a-orange.svg)](#)
 [![Lua Version](https://img.shields.io/badge/Lua-5.4.6-blue.svg)](https://www.lua.org)
+[![Version](https://img.shields.io/badge/Version-1.0.4-brightgreen.svg)](#)
 
-**AMLua (Android Mod Lua)** adalah plugin shared library (`libAMLua.so`) resmi berbasis **Android Mod Loader (AML)** yang dirancang untuk memuat, mengelola, dan mengeksekusi script **Lua** secara dinamis langsung di dalam game **Grand Theft Auto: San Andreas** (Android).
+**AMLua (Android Mod Lua)** adalah plugin shared library resmi berbasis **Android Mod Loader (AML)** yang dirancang untuk memuat, mengelola, dan mengeksekusi script **Lua** secara dinamis langsung di dalam game **Grand Theft Auto: San Andreas** (Android).
 
-Dengan AMLua, para modder tidak perlu lagi melakukan re-kompilasi kode C/C++ yang rumit atau menggunakan toolchain NDK setiap kali ingin membuat atau menguji mod. Cukup tulis script `.lua`, taruh di folder `scripts/`, dan script akan langsung aktif di dalam game!
+Binary AMLua hadir dengan penamaan arsitektur yang terpisah dan jelas:
+- **`libAMLua64.so`** — Khusus arsitektur **ARM64 (arm64-v8a)** untuk perangkat Android 64-bit modern.
+- **`libAMLua32.so`** — Khusus arsitektur **ARM32 (armeabi-v7a)** untuk perangkat Android 32-bit klasik.
+
+Dengan AMLua, para modder tidak perlu lagi melakukan re-kompilasi kode C/C++ yang rumit atau menggunakan toolchain NDK setiap kali ingin membuat atau menguji mod. Cukup tulis script `.lua`, taruh di folder `scripts/`, dan script akan langsung aktif di dalam game! Tersedia file `.so` langsung di halaman Release tanpa harus repot mengekstrak file ZIP.
 
 ---
 
@@ -17,13 +22,17 @@ Dengan AMLua, para modder tidak perlu lagi melakukan re-kompilasi kode C/C++ yan
    - [Latar Belakang & Arsitektur](#latar-belakang--arsitektur)
    - [Cara Kerja AMLua](#cara-kerja-amlua)
    - [Fitur Utama & Keunggulan](#fitur-utama--keunggulan)
-2. [Dokumentasi Lengkap API AMLua](#-dokumentasi-lengkap-api-amlua)
+2. [Fitur Crash Handler & Error Logging](#-fitur-crash-handler--error-logging)
+   - [Log Crash Sistem (amlua_crash.log)](#1-log-crash-sistem-amlua_crashlog)
+   - [Log Error Runtime Lua (amlua_error.log)](#2-log-error-runtime-lua-amlua_errorlog)
+   - [Log Eksekusi Normal (amlua.log)](#3-log-eksekusi-normal-amlualog)
+3. [Dokumentasi Lengkap API AMLua](#-dokumentasi-lengkap-api-amlua)
    - [Modul Player](#1-modul-player)
    - [Modul Vehicle](#2-modul-vehicle)
    - [Modul Game](#3-modul-game)
    - [Modul AMLua](#4-modul-amlua)
    - [Daftar Kode Warna & Format Dialog GTA SA](#5-daftar-kode-warna--format-dialog-gta-sa)
-3. [Belajar Kilat AMLua Sampai Bisa (Tutorial Lengkap dari Nol)](#-belajar-kilat-amlua-sampai-bisa-tutorial-lengkap-dari-nol)
+4. [Belajar Kilat AMLua Sampai Bisa (Tutorial Lengkap dari Nol)](#-belajar-kilat-amlua-sampai-bisa-tutorial-lengkap-dari-nol)
    - [Pelajaran 1: Struktur Folder & File Script](#pelajaran-1-struktur-folder--file-script)
    - [Pelajaran 2: Hello World (Script Pertama Anda)](#pelajaran-2-hello-world-script-pertama-anda)
    - [Pelajaran 3: Memahami Game Loop (OnTick) & Frame Timing](#pelajaran-3-memahami-game-loop-ontick--frame-timing)
@@ -31,10 +40,10 @@ Dengan AMLua, para modder tidak perlu lagi melakukan re-kompilasi kode C/C++ yan
    - [Pelajaran 5: Membuat Mod Auto-Repair Kendaraan](#pelajaran-5-membuat-mod-auto-repair-kendaraan)
    - [Pelajaran 6: Memanggil Script Lain Berkali-kali (Modular Modding)](#pelajaran-6-memanggil-script-lain-berkali-kali-modular-modding)
    - [Pelajaran 7: Debugging & Mengatasi Error](#pelajaran-7-debugging--mengatasi-error)
-4. [In-Game Mod List Viewer (Melihat Daftar Mod Aktif)](#-in-game-mod-list-viewer)
-5. [Panduan Pemasangan di HP Android](#-panduan-pemasangan-di-hp-android)
-6. [Kompilasi / Build dari Source Code](#-kompilasi--build-dari-source-code)
-7. [Lisensi](#-lisensi)
+5. [In-Game Mod List Viewer (Melihat Daftar Mod Aktif)](#-in-game-mod-list-viewer)
+6. [Panduan Pemasangan di HP Android](#-panduan-pemasangan-di-hp-android)
+7. [Kompilasi / Build dari Source Code](#-kompilasi--build-dari-source-code)
+8. [Lisensi](#-lisensi)
 
 ---
 
@@ -54,9 +63,9 @@ Pada ekosistem modding GTA San Andreas Android, terdapat dua metode tradisional 
 └───────────────────────────▲────────────────────────────┘
                             │ Hooks & Symbol Binding
 ┌───────────────────────────┴────────────────────────────┐
-│                   AMLua (libAMLua.so)                  │
+│         AMLua (libAMLua64.so / libAMLua32.so)          │
 │  - AML Integration     - Safe Entity Offsets (32/64)   │
-│  - CGame::Process Hook - CHud::SetHelpMessage Bridge   │
+│  - Crash Signal Handler- CHud::SetHelpMessage Bridge   │
 │  - Native Lua 5.4.6 VM - Multi-Script Manager          │
 └───────────────────────────▲────────────────────────────┘
                             │ Scans & Loads
@@ -67,20 +76,83 @@ Pada ekosistem modding GTA San Andreas Android, terdapat dua metode tradisional 
 ```
 
 ### Cara Kerja AMLua
-1. **Inisialisasi**: Saat GTA San Andreas dimuat, **Android Mod Loader (AML)** memanggil fungsi `OnModLoad()` pada `libAMLua.so`.
-2. **Symbol Hooking**: AMLua mencari alamat memori internal `libGTASA.so` untuk menemukan fungsi penting seperti loop game (`CGame::Process`), pencari pemain (`FindPlayerPed`), dan sistem dialog native (`CHud::SetHelpMessage`).
-3. **VM Initialization**: AMLua menyalakan runtime engine Lua 5.4.6, mendaftarkan seluruh API modul (`Player`, `Vehicle`, `Game`, `AMLua`), dan mengaktifkan proteksi Sandbox.
-4. **Auto-Discovery**: AMLua otomatis membaca isi folder `scripts/`, lalu mengeksekusi semua file `.lua` secara berurutan.
-5. **Tick Event Dispatching**: Setiap frame game berjalan, AMLua memanggil seluruh fungsi `Game.OnTick` yang didaftarkan oleh script-script Anda.
-6. **In-Game Dialog**: AMLua menyapa pemain dengan dialog sambutan resmi di pojok kanan atas layar begitu karakter siap dimainkan.
+1. **Inisialisasi**: Saat GTA San Andreas dimuat, **Android Mod Loader (AML)** memanggil fungsi `OnModLoad()` pada library binary (`libAMLua64.so` atau `libAMLua32.so`).
+2. **Signal Crash Handler**: AMLua segera mengaktifkan penangkap sinyal fatal Linux (`SIGSEGV`, `SIGABRT`, `SIGBUS`, `SIGFPE`, `SIGILL`) dengan alternate stack agar setiap crash tercatat rinci.
+3. **Symbol Hooking**: AMLua mencari alamat memori internal `libGTASA.so` untuk menemukan fungsi penting seperti loop game (`CGame::Process`), pencari pemain (`FindPlayerPed`), dan sistem dialog native (`CHud::SetHelpMessage`).
+4. **VM Initialization**: AMLua menyalakan runtime engine Lua 5.4.6, mendaftarkan seluruh API modul (`Player`, `Vehicle`, `Game`, `AMLua`), dan mengaktifkan proteksi Sandbox.
+5. **Auto-Discovery**: AMLua otomatis membaca isi folder `scripts/`, lalu mengeksekusi semua file `.lua` secara berurutan.
+6. **Tick Event Dispatching**: Setiap frame game berjalan, AMLua memanggil seluruh fungsi `Game.OnTick` yang didaftarkan oleh script-script Anda.
+7. **In-Game Dialog**: AMLua menyapa pemain dengan dialog sambutan resmi di pojok kanan atas layar begitu karakter siap dimainkan.
 
 ### Fitur Utama & Keunggulan
-- **Dual Architecture (32-bit & 64-bit)**: Mendukung penuh `arm64-v8a` (Android 64-bit modern) maupun `armeabi-v7a` (Android 32-bit klasik).
+- **Dedicated Distinct Naming**: Nama file 64-bit (`libAMLua64.so`) dan 32-bit (`libAMLua32.so`) berbeda, mencegah salah pasang atau tertimpa tanpa sengaja.
+- **Direct `.so` Download**: File `.so` dapat diunduh langsung satu per satu di GitHub Release tanpa perlu mengekstrak file ZIP di smartphone.
+- **Full Crash & Error Logging**: Setiap ada error atau game crash, penyebabnya langsung disimpan di file log diagnostik (`amlua_crash.log` dan `amlua_error.log`).
 - **Native Top-Right Dialog**: Menggunakan dialog box bawaan GTA San Andreas (`CHud::SetHelpMessage`) yang estetik di pojok kanan atas dengan teks khas GTA dan dukungan kode warna penuh (`~g~`, `~y~`, `~w~`, `~n~`).
 - **Multi-Calling Support**: Bebas memanggil `Game.PrintText`, `dofile()`, atau `require()` berkali-kali tanpa dibatasi oleh engine.
 - **Gesture Mod List Viewer**: Buka daftar mod aktif di layar cukup dengan double-tap di bagian atas layar atau tap dengan 2 jari.
 - **Zero-Crash Memory Safety**: Dilengkapi validasi memori kernel Linux (`IsValidMemory`) dan verifikasi pointer entitas game (`IsValidGameObject`) agar aman dari crash New Game, cutscene, dan transisi interior.
-- **Traceback Logging**: Setiap error sintaks atau runtime pada script Lua langsung dicatat lengkap dengan nomor baris dan stack trace ke `amlua.log` dan Android Logcat.
+
+---
+
+## 🛡️ Fitur Crash Handler & Error Logging
+
+AMLua v1.0.4 dilengkapi sistem diagnostik tingkat lanjut untuk mempermudah menemukan penyebab masalah atau bug pada script maupun game.
+
+Terdapat 3 file log yang otomatis dibuat di folder data GTA San Andreas:
+```text
+/storage/emulated/0/Android/data/com.rockstargames.gtasa/files/
+├── amlua_crash.log   <-- Catatan saat game crash fatal (Segmentation fault, dsb)
+├── amlua_error.log   <-- Catatan error sintaks / runtime Lua
+└── amlua.log         <-- Catatan aktivitas normal Game.Log
+```
+
+### 1. Log Crash Sistem (`amlua_crash.log`)
+Jika terjadi crash sistem (seperti salah membaca pointer memori di luar AMLua atau game crash bawaan), AMLua menangkap sinyal POSIX (`SIGSEGV`, `SIGABRT`, `SIGBUS`) menggunakan alternate signal stack (`sigaltstack`). Handler ini tetap dapat menulis log meskipun heap memory rusak!
+
+Informasi yang dicatat di `amlua_crash.log`:
+- **Waktu & Tanggal Kejadian**
+- **Jenis Sinyal**: Contoh: `SIGSEGV (Segmentation Fault - Invalid Memory Access)`
+- **Script & Aksi Aktif**: Menunjukkan script Lua dan fungsi yang sedang dieksekusi saat crash terjadi.
+- **Crash PC Address & Module**: Alamat memori penyebab crash yang dipetakan ke library terkait (misal: `libGTASA.so + 0x3F4120` atau `libAMLua64.so + 0x12A0`).
+- **Caller Return Address (LR)**: Alamat fungsi pemanggil.
+- **Register CPU Lengkap**: Nilai seluruh register prosesor (`X0-X30`, `SP`, `PC` pada 64-bit; `R0-R10`, `FP`, `IP`, `SP`, `LR`, `PC` pada 32-bit).
+
+Contoh isi `amlua_crash.log`:
+```text
+================================================================================
+                           AMLUA CRASH LOG REPORT                               
+================================================================================
+Date/Time       : 2026-09-13 14:40:12
+Signal Caught   : SIGSEGV (Segmentation Fault - Invalid Memory Access) (11)
+Signal Code     : 1 SEGV_MAPERR (Address not mapped to object)
+Fault Address   : 0x0
+Active Script   : mod_test.lua
+Last Action     : Script Execution (Startup)
+--------------------------------------------------------------------------------
+Crash PC Address: 0x73841a3024 (/data/app/.../lib/arm64/libGTASA.so + 0x3d2024)
+Crash Function  : _ZN5CPed10GetVehicleEv
+Caller LR Return: 0x7385201150 (/data/app/.../lib/arm64/libAMLua64.so + 0x22150)
+Stack Pointer SP: 0x7fe32b9180
+--------------------------------------------------------------------------------
+CPU REGISTERS DUMP:
+  X00: 0x0000000000000000   X01: 0x00000073841a2f00
+  ...
+================================================================================
+```
+
+### 2. Log Error Runtime Lua (`amlua_error.log`)
+Jika ada kesalahan penulisan kode Lua (misal: memanggil fungsi yang tidak ada, salah tipe parameter, atau file tidak ditemukan), error akan dicatat ke `amlua_error.log` beserta **stack traceback** lengkap tanpa menyebabkan game crash:
+
+```text
+[2026-09-13 14:42:01] [Script Error in player_mod.lua]:
+scripts/player_mod.lua:15: attempt to index a nil value (global 'Plyer')
+stack traceback:
+    scripts/player_mod.lua:15: in function <scripts/player_mod.lua:12>
+```
+
+### 3. Log Eksekusi Normal (`amlua.log`)
+Mencatat informasi pemuatan script, inisialisasi AMLua, dan pesan-pesan custom yang Anda kirim lewat `Game.Log("...")`.
 
 ---
 
@@ -342,20 +414,31 @@ Game.RunString("Game.PrintText('~b~Dieksekusi via RunString!', 2000)")
 ---
 
 ### Pelajaran 7: Debugging & Mengatasi Error
-Jika script Anda memiliki kesalahan ketik (syntax error) atau runtime error, game **TIDAK AKAN CRASH**. AMLua memiliki error handler cerdas yang menangkap error dan mencatatnya ke file log.
+Jika script Anda memiliki kesalahan sintaks atau runtime error, game **TIDAK AKAN CRASH**. AMLua menangkap error tersebut dan menyimpannya di file log khusus:
 
-1. Buka file log di HP Anda:
+1. **Error Script Lua**:
+   Buka file:
    ```text
-   /storage/emulated/0/Android/data/com.rockstargames.gtasa/files/amlua.log
+   /storage/emulated/0/Android/data/com.rockstargames.gtasa/files/amlua_error.log
    ```
-2. Contoh isi log ketika terjadi error:
+   Contoh isi log error:
    ```text
    [2026-09-13 14:30:00] [Script Error in myscript.lua]:
    scripts/myscript.lua:12: attempt to call a nil value (field 'NonExistentFunction')
    stack traceback:
        scripts/myscript.lua:12: in main chunk
    ```
-3. Lihat nomor barisnya (misal: baris 12), perbaiki kodenya, lalu gunakan fitur `Game.ReloadScripts()` atau restart game untuk mencoba kembali!
+   Lihat nomor barisnya (misal: baris 12), perbaiki kodenya di text editor, lalu gunakan fitur `Game.ReloadScripts()` atau restart game untuk mencoba kembali.
+
+2. **Game Crash Fatal (Crash Handler)**:
+   Jika game tertutup mendadak / force close karena mod lain atau bug fatal, buka:
+   ```text
+   /storage/emulated/0/Android/data/com.rockstargames.gtasa/files/amlua_crash.log
+   ```
+   Crash log akan memberikan informasi detail:
+   - Modul library penyebab crash (misal: `libGTASA.so + 0x...` atau `libAMLua64.so`)
+   - Script yang sedang berjalan saat crash (`Active Script`)
+   - Nilai register prosesor saat kejadian.
 
 ---
 
@@ -384,22 +467,26 @@ AMLua Mods (2):
 
 ## 📲 Panduan Pemasangan di HP Android
 
+Anda tidak perlu lagi ribet mengekstrak file ZIP di HP jika hanya butuh file `.so`-nya!
+
 1. Pastikan game **GTA San Andreas Android** Anda sudah terpasang **Android Mod Loader (AML)**.
-2. Unduh file rilis terbaru (`AMLua-v1.0.4.zip`) dari menu [Releases](https://github.com/sunandar3221/AMLua/releases).
-3. Ekstrak file zip tersebut. Anda akan mendapatkan dua folder arsitektur:
-   - `arm64-v8a/libAMLua.so` (untuk mayoritas HP Android modern 64-bit).
-   - `armeabi-v7a/libAMLua.so` (untuk HP 32-bit).
-4. Salin file `libAMLua.so` yang sesuai ke direktori mods AML game Anda:
+2. Buka menu [Releases](https://github.com/sunandar3221/AMLua/releases) di GitHub AMLua:
+   - **Opsi Cepat (Tanpa ZIP)**:
+     - Unduh **`libAMLua64.so`** jika HP Anda 64-bit (kebanyakan HP Android rilisan 2018 ke atas).
+     - Unduh **`libAMLua32.so`** jika HP Anda 32-bit.
+   - **Opsi Lengkap (ZIP)**:
+     - Unduh **`AMLua-v1.0.4.zip`** (berisi kedua file binary `.so`, contoh script `test.lua`, dan dokumentasi lengkap).
+3. Salin file `.so` yang sesuai ke direktori mods AML game Anda:
    ```text
-   /Android/data/com.rockstargames.gtasa/mods/
+   /storage/emulated/0/Android/data/com.rockstargames.gtasa/mods/
    ```
-   *(Atau pasang langsung melalui aplikasi Android Mod Loader APK).*
-5. Buat folder `scripts` di direktori:
+   *(Atau pasang file `.so` langsung melalui menu Mod Manager di aplikasi Android Mod Loader APK).*
+4. Buat folder `scripts` di direktori:
    ```text
    /storage/emulated/0/Android/data/com.rockstargames.gtasa/files/scripts/
    ```
-6. Masukkan file-file script Lua Anda (misal: `test.lua`) ke dalam folder `scripts/` tersebut.
-7. Buka game GTA San Andreas. Dialog sambutan AMLua akan menyapa di pojok kanan atas begitu CJ spawn!
+5. Masukkan file-file script Lua Anda (misal: `test.lua`) ke dalam folder `scripts/` tersebut.
+6. Buka game GTA San Andreas. Dialog sambutan AMLua akan menyapa di pojok kanan atas begitu permainan siap dimulai!
 
 ---
 
@@ -414,7 +501,7 @@ Jika Anda ingin memodifikasi source code C++ AMLua dan melakukan kompilasi sendi
 
 ### Perintah Build:
 
-#### 1. Build arm64-v8a (64-bit)
+#### 1. Build arm64-v8a (Output: `libAMLua64.so`)
 ```powershell
 cmake -B build/arm64-v8a -G "Ninja" `
   -DCMAKE_TOOLCHAIN_FILE="C:/Android/Sdk/ndk/26.3.11579264/build/cmake/android.toolchain.cmake" `
@@ -425,7 +512,7 @@ cmake -B build/arm64-v8a -G "Ninja" `
 cmake --build build/arm64-v8a
 ```
 
-#### 2. Build armeabi-v7a (32-bit)
+#### 2. Build armeabi-v7a (Output: `libAMLua32.so`)
 ```powershell
 cmake -B build/armeabi-v7a -G "Ninja" `
   -DCMAKE_TOOLCHAIN_FILE="C:/Android/Sdk/ndk/26.3.11579264/build/cmake/android.toolchain.cmake" `
@@ -436,7 +523,7 @@ cmake -B build/armeabi-v7a -G "Ninja" `
 cmake --build build/armeabi-v7a
 ```
 
-Hasil file library `libAMLua.so` akan berada di folder `build/arm64-v8a/` dan `build/armeabi-v7a/`.
+Hasil file library `libAMLua64.so` dan `libAMLua32.so` akan berada di folder `build/arm64-v8a/` dan `build/armeabi-v7a/`.
 
 ---
 

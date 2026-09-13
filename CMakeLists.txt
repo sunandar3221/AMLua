@@ -52,16 +52,23 @@ set(LUA_SOURCES
 set(AMLUA_SOURCES
     jni/main.cpp
     jni/lua_bindings.cpp
+    jni/crash_handler.cpp
     jni/aml/logger.cpp
     jni/aml/config.cpp
     ${LUA_SOURCES}
 )
 
-# Define shared library output: libAMLua.so
+# Define shared library output: libAMLua64.so or libAMLua32.so
 add_library(AMLua SHARED ${AMLUA_SOURCES})
 
+if(ANDROID_ABI STREQUAL "arm64-v8a")
+    set(AMLUA_LIB_NAME "AMLua64")
+else()
+    set(AMLUA_LIB_NAME "AMLua32")
+endif()
+
 set_target_properties(AMLua PROPERTIES
-    OUTPUT_NAME "AMLua"
+    OUTPUT_NAME "${AMLUA_LIB_NAME}"
     PREFIX "lib"
     SUFFIX ".so"
 )
