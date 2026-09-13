@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 #include <string>
+#include <vector>
 
 // Lua 5.4 C API
 extern "C" {
@@ -29,4 +30,13 @@ namespace AMLua
 
     // Return current log file path
     const char* GetLogFilePath();
+
+    // Show native dialog listing all loaded Lua mods
+    void ShowScriptListDialog();
+
+    // Get list of loaded script filenames
+    const std::vector<std::string>& GetLoadedScripts();
+
+    // Handle touch input for gestures (e.g. double-tap top of screen to view mod list)
+    void OnTouchEvent(int actionType, int trackNum, int x, int y);
 }

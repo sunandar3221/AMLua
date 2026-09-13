@@ -19,35 +19,42 @@ namespace AMLua
 {
     static lua_State* g_LuaState = nullptr;
     static std::string g_LogFilePath = "/storage/emulated/0/Android/data/com.rockstargames.gtasa/files/amlua.log";
+    static std::string g_ScriptsDirPath = "/storage/emulated/0/Android/data/com.rockstargames.gtasa/files/scripts";
     static uintptr_t g_pGTASA = 0;
+    static uintptr_t g_LibGTASASize = 0;
+    static std::vector<std::string> g_LoadedScripts;
 
-    // Struct member offsets for CPed and CVehicle
+    // Exact struct member offsets verified from GTA SA Android headers (aml-psdk)
     #ifdef AML32
-        constexpr uintptr_t OFF_PED_HEALTH = 0x540;
-        constexpr uintptr_t OFF_PED_MAX_HEALTH = 0x544;
-        constexpr uintptr_t OFF_PED_ARMOUR = 0x548;
-        constexpr uintptr_t OFF_VEH_HEALTH = 0x4C0;
+        constexpr uintptr_t OFF_PED_HEALTH = 0x544;
+        constexpr uintptr_t OFF_PED_MAX_HEALTH = 0x548;
+        constexpr uintptr_t OFF_PED_ARMOUR = 0x54C;
+        constexpr uintptr_t OFF_VEH_HEALTH = 0x4CC;
     #else
-        constexpr uintptr_t OFF_PED_HEALTH = 0x764;
-        constexpr uintptr_t OFF_PED_MAX_HEALTH = 0x768;
-        constexpr uintptr_t OFF_PED_ARMOUR = 0x76C;
-        constexpr uintptr_t OFF_VEH_HEALTH = 0x5A0;
+        constexpr uintptr_t OFF_PED_HEALTH = 0x6AC;
+        constexpr uintptr_t OFF_PED_MAX_HEALTH = 0x6B0;
+        constexpr uintptr_t OFF_PED_ARMOUR = 0x6B4;
+        constexpr uintptr_t OFF_VEH_HEALTH = 0x634;
     #endif
 
     // Function pointer types for resolved game symbols
     typedef void* (*FindPlayerPed_t)(int playerNum);
-    typedef void  (*AddMessageJumpQ_t)(const char* text, unsigned int time, unsigned short flag, bool bPreviousBrief);
-    typedef void  (*SetHelpMessage_t)(const char* text, bool quickMessage, bool permanent, bool addToBrief, unsigned int time);
+    // CMessages::AddMessageJumpQ takes (const char* Label, GxtChar* pText, u32 Duration, u16 Colour, bool bAddToPrevBriefs)
+    typedef void  (*AddMessageJumpQ_t)(const char* label, unsigned short* pText, unsigned int duration, unsigned short flag, bool bAddToPrevBriefs);
     typedef void  (*VehicleFix_t)(void* vehicle);
 
     static FindPlayerPed_t   pfnFindPlayerPed = nullptr;
     static AddMessageJumpQ_t pfnAddMessageJumpQ = nullptr;
-    static SetHelpMessage_t  pfnSetHelpMessage = nullptr;
     static VehicleFix_t      pfnVehicleFix = nullptr;
 
     const char* GetLogFilePath()
     {
         return g_LogFilePath.c_str();
+    }
+
+    const std::vector<std::string>& GetLoadedScripts()
+    {
+        return g_LoadedScripts;
     }
 
     void Log(const char* fmt, ...)
@@ -85,6 +92,19 @@ namespace AMLua
         }
     }
 
+    // Convert standard 8-bit ASCII string to GTA SA 16-bit GXT string
+    static void ConvertToGxt(const char* src, unsigned short* dst, size_t maxChars)
+    {
+        if (!src || !dst || maxChars == 0) return;
+        size_t i = 0;
+        while (src[i] != '\0' && i < maxChars - 1)
+        {
+            dst[i] = (unsigned char)src[i];
+            ++i;
+        }
+        dst[i] = 0;
+    }
+
     // Traceback error handler for protected lua_pcall
     static int Lua_TracebackHandler(lua_State* L)
     {
@@ -102,6 +122,29 @@ namespace AMLua
         }
         luaL_traceback(L, L, msg, 1);
         return 1;
+    }
+
+    // Verify pointer memory safety to avoid dereferencing garbage or dying game entities
+    inline bool IsValidGameObject(void* ptr)
+    {
+        if (!ptr) return false;
+        uintptr_t addr = (uintptr_t)ptr;
+        #ifdef AML32
+        if (addr < 0x10000 || addr >= 0xFFFFF000) return false;
+        #else
+        if (addr < 0x10000 || addr >= 0x00007FFFFFFFFFFFULL) return false;
+        #endif
+
+        // Verify vtable pointer is non-null and valid address
+        uintptr_t vtable = *(uintptr_t*)ptr;
+        if (!vtable) return false;
+        #ifdef AML32
+        if (vtable < 0x10000 || vtable >= 0xFFFFF000) return false;
+        #else
+        if (vtable < 0x10000 || vtable >= 0x00007FFFFFFFFFFFULL) return false;
+        #endif
+
+        return true;
     }
 
     // Safe helper to extract a pointer from Lua stack (lightuserdata or integer)
@@ -135,7 +178,7 @@ namespace AMLua
             ped = pfnFindPlayerPed(-1);
         }
 
-        if (ped)
+        if (IsValidGameObject(ped))
         {
             lua_pushlightuserdata(L, ped);
         }
@@ -150,9 +193,9 @@ namespace AMLua
     static int Lua_Player_SetHealth(lua_State* L)
     {
         void* ped = GetPointerFromArg(L, 1);
-        if (!ped)
+        if (!IsValidGameObject(ped))
         {
-            return luaL_error(L, "Player.SetHealth: invalid ped pointer");
+            return 0; // Silently and safely ignore if invalid
         }
 
         float hp = (float)luaL_checknumber(L, 2);
@@ -164,9 +207,10 @@ namespace AMLua
     static int Lua_Player_GetHealth(lua_State* L)
     {
         void* ped = GetPointerFromArg(L, 1);
-        if (!ped)
+        if (!IsValidGameObject(ped))
         {
-            return luaL_error(L, "Player.GetHealth: invalid ped pointer");
+            lua_pushnumber(L, 0.0);
+            return 1;
         }
 
         float hp = *(float*)((uintptr_t)ped + OFF_PED_HEALTH);
@@ -178,9 +222,9 @@ namespace AMLua
     static int Lua_Player_SetArmour(lua_State* L)
     {
         void* ped = GetPointerFromArg(L, 1);
-        if (!ped)
+        if (!IsValidGameObject(ped))
         {
-            return luaL_error(L, "Player.SetArmour: invalid ped pointer");
+            return 0;
         }
 
         float armour = (float)luaL_checknumber(L, 2);
@@ -192,9 +236,10 @@ namespace AMLua
     static int Lua_Player_GetArmour(lua_State* L)
     {
         void* ped = GetPointerFromArg(L, 1);
-        if (!ped)
+        if (!IsValidGameObject(ped))
         {
-            return luaL_error(L, "Player.GetArmour: invalid ped pointer");
+            lua_pushnumber(L, 0.0);
+            return 1;
         }
 
         float armour = *(float*)((uintptr_t)ped + OFF_PED_ARMOUR);
@@ -210,9 +255,9 @@ namespace AMLua
     static int Lua_Vehicle_Repair(lua_State* L)
     {
         void* veh = GetPointerFromArg(L, 1);
-        if (!veh)
+        if (!IsValidGameObject(veh))
         {
-            return luaL_error(L, "Vehicle.Repair: invalid vehicle pointer");
+            return 0;
         }
 
         if (pfnVehicleFix)
@@ -220,7 +265,7 @@ namespace AMLua
             pfnVehicleFix(veh);
         }
 
-        // Set vehicle health to 1000.0f
+        // Set vehicle health to 1000.0f (full health)
         *(float*)((uintptr_t)veh + OFF_VEH_HEALTH) = 1000.0f;
         return 0;
     }
@@ -229,9 +274,10 @@ namespace AMLua
     static int Lua_Vehicle_GetHealth(lua_State* L)
     {
         void* veh = GetPointerFromArg(L, 1);
-        if (!veh)
+        if (!IsValidGameObject(veh))
         {
-            return luaL_error(L, "Vehicle.GetHealth: invalid vehicle pointer");
+            lua_pushnumber(L, 0.0);
+            return 1;
         }
 
         float hp = *(float*)((uintptr_t)veh + OFF_VEH_HEALTH);
@@ -243,9 +289,9 @@ namespace AMLua
     static int Lua_Vehicle_SetHealth(lua_State* L)
     {
         void* veh = GetPointerFromArg(L, 1);
-        if (!veh)
+        if (!IsValidGameObject(veh))
         {
-            return luaL_error(L, "Vehicle.SetHealth: invalid vehicle pointer");
+            return 0;
         }
 
         float hp = (float)luaL_checknumber(L, 2);
@@ -263,21 +309,30 @@ namespace AMLua
         const char* text = luaL_checkstring(L, 1);
         int timeMs = (int)luaL_optinteger(L, 2, 2000);
 
-        if (pfnAddMessageJumpQ)
+        // Check if game world is active (player ped exists)
+        bool isGameActive = false;
+        if (pfnFindPlayerPed)
         {
-            pfnAddMessageJumpQ(text, (unsigned int)timeMs, 0, false);
-        }
-        else if (pfnSetHelpMessage)
-        {
-            pfnSetHelpMessage(text, true, false, false, (unsigned int)timeMs);
+            void* ped = pfnFindPlayerPed(-1);
+            if (IsValidGameObject(ped))
+            {
+                isGameActive = true;
+            }
         }
 
-        if (aml)
+        if (isGameActive && pfnAddMessageJumpQ)
         {
+            unsigned short gxtBuf[256];
+            ConvertToGxt(text, gxtBuf, sizeof(gxtBuf) / sizeof(gxtBuf[0]));
+            pfnAddMessageJumpQ(nullptr, gxtBuf, (unsigned int)timeMs, 0, false);
+        }
+        else if (aml)
+        {
+            // Guaranteed safe anywhere (menus, loading screens, or gameplay)
             aml->ShowToast(timeMs > 3000, "%s", text);
         }
 
-        Log("[In-Game Text] %s", text);
+        Log("[PrintText] %s", text);
         return 0;
     }
 
@@ -308,14 +363,93 @@ namespace AMLua
         lua_rawseti(L, -2, len + 1);
         lua_pop(L, 1); // pop callbacks table
 
-        Log("Registered new Lua tick callback #%d", len + 1);
+        Log("Registered Lua tick callback #%d", len + 1);
         return 0;
+    }
+
+    // Return list of loaded scripts to Lua as an array of strings
+    static int Lua_GetLoadedScripts(lua_State* L)
+    {
+        lua_newtable(L);
+        for (size_t i = 0; i < g_LoadedScripts.size(); ++i)
+        {
+            lua_pushstring(L, g_LoadedScripts[i].c_str());
+            lua_rawseti(L, -2, (int)(i + 1));
+        }
+        return 1;
+    }
+
+    // Show native dialog listing all loaded scripts
+    void ShowScriptListDialog()
+    {
+        std::string msg = "Active Lua Mods (" + std::to_string(g_LoadedScripts.size()) + "):\n\n";
+        if (g_LoadedScripts.empty())
+        {
+            msg += "  (No .lua scripts found in scripts folder)\n";
+        }
+        else
+        {
+            for (size_t i = 0; i < g_LoadedScripts.size(); ++i)
+            {
+                msg += "  " + std::to_string(i + 1) + ". " + g_LoadedScripts[i] + "\n";
+            }
+        }
+        msg += "\nScripts Path:\n" + g_ScriptsDirPath;
+
+        Log("Opening AMLua Script List Dialog:\n%s", msg.c_str());
+
+        if (aml)
+        {
+            aml->ShowDialog("AMLua - Loaded Scripts", msg.c_str(), "OK");
+            aml->ShowToast(true, "AMLua: %zu script(s) loaded.", g_LoadedScripts.size());
+        }
+    }
+
+    static int Lua_ShowScriptList(lua_State* L)
+    {
+        ShowScriptListDialog();
+        return 0;
+    }
+
+    // Touch event gesture detection: Double-tap top of screen or two-finger tap to show mod list
+    void OnTouchEvent(int actionType, int trackNum, int x, int y)
+    {
+        // actionType: 0 = DOWN, 1 = MOVE, 2 = UP
+        if (actionType == 0) // Touch DOWN
+        {
+            // Check if touch is near top of screen (y < 200)
+            if (y < 200)
+            {
+                static clock_t lastTopTapClock = 0;
+                clock_t curClock = clock();
+                double elapsedMs = (double)(curClock - lastTopTapClock) * 1000.0 / CLOCKS_PER_SEC;
+                lastTopTapClock = curClock;
+
+                if (elapsedMs < 600.0 && elapsedMs > 50.0)
+                {
+                    // Double-tap detected on top of screen!
+                    ShowScriptListDialog();
+                }
+            }
+            else if (trackNum >= 1)
+            {
+                // Two-finger tap
+                static clock_t lastTwoFingerClock = 0;
+                clock_t curClock = clock();
+                double elapsedMs = (double)(curClock - lastTwoFingerClock) * 1000.0 / CLOCKS_PER_SEC;
+                if (elapsedMs > 1200.0)
+                {
+                    lastTwoFingerClock = curClock;
+                    ShowScriptListDialog();
+                }
+            }
+        }
     }
 
     // Sandboxing: disable dangerous os / io / package capabilities
     static void ApplySandbox(lua_State* L)
     {
-        // 1. os.execute
+        // 1. os.execute, os.remove, os.rename
         lua_getglobal(L, "os");
         if (lua_istable(L, -1))
         {
@@ -346,7 +480,7 @@ namespace AMLua
         }
         lua_pop(L, 1);
 
-        Log("Lua Sandbox applied: os.execute, package.loadlib, io.popen disabled.");
+        Log("Lua Sandbox active: os.execute, package.loadlib, io.popen disabled.");
     }
 
     // Register all APIs to Lua global namespace
@@ -384,14 +518,22 @@ namespace AMLua
         lua_setfield(L, -2, "Log");
         lua_pushcfunction(L, Lua_RegisterTick);
         lua_setfield(L, -2, "OnTick");
+        lua_pushcfunction(L, Lua_GetLoadedScripts);
+        lua_setfield(L, -2, "GetLoadedScripts");
+        lua_pushcfunction(L, Lua_ShowScriptList);
+        lua_setfield(L, -2, "ShowScriptList");
         lua_setglobal(L, "Game");
 
-        // Table: AMLua (contains version and direct module references)
+        // Table: AMLua (contains version, mod list inspection, and direct module references)
         lua_newtable(L);
         lua_pushstring(L, "1.0");
         lua_setfield(L, -2, "Version");
         lua_pushcfunction(L, Lua_RegisterTick);
         lua_setfield(L, -2, "OnTick");
+        lua_pushcfunction(L, Lua_GetLoadedScripts);
+        lua_setfield(L, -2, "GetLoadedScripts");
+        lua_pushcfunction(L, Lua_ShowScriptList);
+        lua_setfield(L, -2, "ShowScriptList");
 
         // Reference Player, Vehicle, Game inside AMLua as well
         lua_getglobal(L, "Player");
@@ -408,42 +550,37 @@ namespace AMLua
     {
         g_pGTASA = libGTASA;
 
-        // Determine log path from AML data path if available
+        // Determine log and scripts path from AML data path if available
         if (aml)
         {
             const char* dataPath = aml->GetAndroidDataPath();
             if (dataPath && dataPath[0] != '\0')
             {
                 g_LogFilePath = std::string(dataPath) + "/amlua.log";
+                g_ScriptsDirPath = std::string(dataPath) + "/scripts";
             }
+            g_LibGTASASize = aml->GetLibLength("libGTASA.so");
         }
 
         Log("=========================================");
-        Log("AMLua - Android Mod Lua Script Loader 1.0");
-        Log("Target Library: libGTASA.so (base: %p)", (void*)libGTASA);
-        Log("Log file target: %s", g_LogFilePath.c_str());
+        Log("AMLua: Android Mod Lua Script Loader 1.0");
+        Log("Target: libGTASA.so (base: %p, size: %zu)", (void*)g_pGTASA, (size_t)g_LibGTASASize);
+        Log("Log target: %s", g_LogFilePath.c_str());
+        Log("Scripts dir: %s", g_ScriptsDirPath.c_str());
         Log("=========================================");
 
         // Resolve game engine symbols via AML
         if (aml && g_pGTASA)
         {
-            // FindPlayerPed
+            // FindPlayerPed: _Z13FindPlayerPedi or FindPlayerPed
             pfnFindPlayerPed = (FindPlayerPed_t)aml->GetSym(g_pGTASA, "_Z13FindPlayerPedi");
             if (!pfnFindPlayerPed) pfnFindPlayerPed = (FindPlayerPed_t)aml->GetSym(g_pGTASA, "FindPlayerPed");
             Log("Symbol FindPlayerPed: %p", (void*)pfnFindPlayerPed);
 
             // CMessages::AddMessageJumpQ
-            pfnAddMessageJumpQ = (AddMessageJumpQ_t)aml->GetSym(g_pGTASA, "_ZN9CMessages15AddMessageJumpQEPKcjtb");
-            if (!pfnAddMessageJumpQ) pfnAddMessageJumpQ = (AddMessageJumpQ_t)aml->GetSym(g_pGTASA, "_ZN9CMessages15AddMessageJumpQEPKcttb");
-            if (!pfnAddMessageJumpQ) pfnAddMessageJumpQ = (AddMessageJumpQ_t)aml->GetSym(g_pGTASA, "_ZN9CMessages15AddMessageJumpQEPKcjjb");
-            if (!pfnAddMessageJumpQ) pfnAddMessageJumpQ = (AddMessageJumpQ_t)aml->GetSym(g_pGTASA, "_ZN9CMessages15AddMessageJumpQEPKcjb");
+            pfnAddMessageJumpQ = (AddMessageJumpQ_t)aml->GetSym(g_pGTASA, "_ZN9CMessages15AddMessageJumpQEPKcPtjtb");
+            if (!pfnAddMessageJumpQ) pfnAddMessageJumpQ = (AddMessageJumpQ_t)aml->GetSym(g_pGTASA, "_ZN9CMessages15AddMessageJumpQEPKcjtb");
             Log("Symbol CMessages::AddMessageJumpQ: %p", (void*)pfnAddMessageJumpQ);
-
-            // CHud::SetHelpMessage (fallback text display)
-            pfnSetHelpMessage = (SetHelpMessage_t)aml->GetSym(g_pGTASA, "_ZN4CHud14SetHelpMessageEPKctbbj");
-            if (!pfnSetHelpMessage) pfnSetHelpMessage = (SetHelpMessage_t)aml->GetSym(g_pGTASA, "_ZN4CHud14SetHelpMessageEPKcbbbj");
-            if (!pfnSetHelpMessage) pfnSetHelpMessage = (SetHelpMessage_t)aml->GetSym(g_pGTASA, "_ZN4CHud14SetHelpMessageEPKcb");
-            Log("Symbol CHud::SetHelpMessage: %p", (void*)pfnSetHelpMessage);
 
             // CVehicle::Fix
             pfnVehicleFix = (VehicleFix_t)aml->GetSym(g_pGTASA, "_ZN8CVehicle3FixEv");
@@ -485,6 +622,9 @@ namespace AMLua
     {
         if (!g_LuaState) return;
 
+        g_ScriptsDirPath = scriptsDir;
+        g_LoadedScripts.clear();
+
         Log("Scanning for scripts in: %s", scriptsDir);
 
         // Ensure directory exists
@@ -497,7 +637,6 @@ namespace AMLua
             return;
         }
 
-        std::vector<std::string> scriptFiles;
         struct dirent* entry;
         while ((entry = readdir(dir)) != nullptr)
         {
@@ -506,17 +645,17 @@ namespace AMLua
             size_t len = strlen(entry->d_name);
             if (len > 4 && strcmp(entry->d_name + len - 4, ".lua") == 0)
             {
-                scriptFiles.push_back(entry->d_name);
+                g_LoadedScripts.push_back(entry->d_name);
             }
         }
         closedir(dir);
 
         // Sort files alphabetically for deterministic loading
-        std::sort(scriptFiles.begin(), scriptFiles.end());
+        std::sort(g_LoadedScripts.begin(), g_LoadedScripts.end());
 
-        Log("Found %zu Lua script(s) to load.", scriptFiles.size());
+        Log("Found %zu Lua script(s) to load.", g_LoadedScripts.size());
 
-        for (const auto& fileName : scriptFiles)
+        for (const auto& fileName : g_LoadedScripts)
         {
             std::string fullPath = std::string(scriptsDir) + "/" + fileName;
             Log("----------------------------------------");
@@ -551,6 +690,12 @@ namespace AMLua
             lua_pop(g_LuaState, 1); // remove errHandler
         }
         Log("----------------------------------------");
+
+        // Notify user about loaded scripts on startup
+        if (aml)
+        {
+            aml->ShowToast(false, "AMLua: %zu script(s) loaded. Double-tap top of screen to view list.", g_LoadedScripts.size());
+        }
     }
 
     void ProcessTick()
