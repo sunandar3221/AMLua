@@ -5,7 +5,7 @@
 [![Platform](https://img.shields.io/badge/Platform-Android-green.svg)](https://android.com)
 [![Architecture](https://img.shields.io/badge/Arch-arm64--v8a%20%7C%20armeabi--v7a-orange.svg)](#)
 [![Lua Version](https://img.shields.io/badge/Lua-5.4.6-blue.svg)](https://www.lua.org)
-[![Version](https://img.shields.io/badge/Version-1.0.4-brightgreen.svg)](#)
+[![Version](https://img.shields.io/badge/Version-1.0.5-brightgreen.svg)](#)
 
 **AMLua (Android Mod Lua)** adalah plugin shared library resmi berbasis **Android Mod Loader (AML)** yang dirancang untuk memuat, mengelola, dan mengeksekusi script **Lua** secara dinamis langsung di dalam game **Grand Theft Auto: San Andreas** (Android).
 
@@ -29,13 +29,14 @@ Dengan AMLua, para modder tidak perlu lagi melakukan re-kompilasi kode C/C++ yan
 3. [Dokumentasi Lengkap API AMLua](#-dokumentasi-lengkap-api-amlua)
    - [Modul Player](#1-modul-player)
    - [Modul Vehicle](#2-modul-vehicle)
-   - [Modul Game](#3-modul-game)
-   - [Modul AMLua](#4-modul-amlua)
-   - [Daftar Kode Warna & Format Dialog GTA SA](#5-daftar-kode-warna--format-dialog-gta-sa)
+   - [Modul Game & OnTick](#3-modul-game)
+   - [Modul Timer (Game.Every / Game.After / SetInterval)](#4-modul-timer-alternatif-mudah-berbasis-detik)
+   - [Modul AMLua & Global](#5-modul-amlua)
+   - [Daftar Kode Warna & Format Dialog GTA SA](#6-daftar-kode-warna--format-dialog-gta-sa)
 4. [Belajar Kilat AMLua Sampai Bisa (Tutorial Lengkap dari Nol)](#-belajar-kilat-amlua-sampai-bisa-tutorial-lengkap-dari-nol)
    - [Pelajaran 1: Struktur Folder & File Script](#pelajaran-1-struktur-folder--file-script)
    - [Pelajaran 2: Hello World (Script Pertama Anda)](#pelajaran-2-hello-world-script-pertama-anda)
-   - [Pelajaran 3: Memahami Game Loop (OnTick) & Frame Timing](#pelajaran-3-memahami-game-loop-ontick--frame-timing)
+   - [Pelajaran 3: Memahami Timer: Game.Every (Detik) vs Game.OnTick (Frame)](#pelajaran-3-memahami-timer-gameevery-detik-vs-gameontick-frame)
    - [Pelajaran 4: Membuat Mod Godmode (Darah Kebal)](#pelajaran-4-membuat-mod-godmode-darah-kebal)
    - [Pelajaran 5: Membuat Mod Auto-Repair Kendaraan](#pelajaran-5-membuat-mod-auto-repair-kendaraan)
    - [Pelajaran 6: Memanggil Script Lain Berkali-kali (Modular Modding)](#pelajaran-6-memanggil-script-lain-berkali-kali-modular-modding)
@@ -210,35 +211,66 @@ Modul inti untuk antarmuka game, UI dialog, timer, event loop, dan manajemen scr
 
 | Fungsi | Parameter | Nilai Balik | Deskripsi |
 | :--- | :--- | :--- | :--- |
-| `Game.PrintText(text, timeMs)` | `text` (string), `[timeMs]` (opsional, default 3000) | *(tidak ada)* | Menampilkan teks pada kotak dialog native GTA SA di **pojok kanan atas layar**. Mendukung kode warna GTA. Dapat dipanggil berkali-kali. |
+| `Game.Every(seconds, callback)` | `seconds` (number), `callback` (function) | `number` (timerId) | **(Direkomendasikan)** Menjalankan fungsi berulang kali setiap X detik waktu nyata tanpa ribet menghitung FPS. |
+| `Game.After(seconds, callback)` | `seconds` (number), `callback` (function) | `number` (timerId) | **(Direkomendasikan)** Menjalankan fungsi satu kali saja setelah X detik waktu nyata (delay). |
+| `Game.SetInterval(callback, seconds)` | `callback`, `seconds` *(urutan bebas)* | `number` (timerId) | Identik dengan `Game.Every`. Format standar mirip JavaScript / game engine. |
+| `Game.SetTimeout(callback, seconds)` | `callback`, `seconds` *(urutan bebas)* | `number` (timerId) | Identik dengan `Game.After`. Menjalankan fungsi 1x setelah delay X detik. |
+| `Game.ClearTimer(timerId)` | `timerId` (number) | `boolean` | Menghentikan dan menghapus timer / interval yang sedang berjalan. Alias: `Game.ClearInterval`, `Game.ClearTimeout`. |
+| `Game.OnTick(callback)` | `callback(dt)` (function) | *(tidak ada)* | Mendaftarkan fungsi per frame loop game. Menerima parameter `dt` (delta time dalam detik sejak frame terakhir). |
+| `Game.PrintText(text, timeMs)` | `text` (string), `[timeMs]` (default 3000) | *(tidak ada)* | Menampilkan teks pada dialog native GTA SA di **pojok kanan atas layar**. Mendukung kode warna GTA. Dapat dipanggil berkali-kali. |
 | `Game.ShowHelpMessage(text, timeMs)` | `text`, `[timeMs]` | *(tidak ada)* | Alias identik untuk `Game.PrintText`. |
 | `Game.Log(message)` | `message` (string) | *(tidak ada)* | Menulis teks ke file log `amlua.log` dan Android Logcat dengan tag `AMLua`. |
-| `Game.OnTick(callback)` | `callback` (function) | *(tidak ada)* | Mendaftarkan fungsi yang akan dipanggil secara berkala pada **setiap frame** perulangan game (`CGame::Process`). |
 | `Game.ShowScriptList()` | *(tidak ada)* | *(tidak ada)* | Membuka dialog visual native di pojok kanan atas yang menampilkan daftar semua mod Lua yang aktif. |
 | `Game.GetLoadedScripts()` | *(tidak ada)* | `table` (array of string) | Mengembalikan daftar nama file script `.lua` yang berhasil dimuat oleh AMLua. |
 | `Game.DoFile(filename)` | `filename` (string) | *(hasil kembalian script)* | Menjalankan file script `.lua` lain. Path relatif secara otomatis merujuk ke folder `scripts/`. Dapat dipanggil berkali-kali! |
 | `Game.RunString(code)` | `code` (string) | *(hasil kembalian code)* | Mengevaluasi dan menjalankan baris kode Lua dari bentuk string secara dinamis. |
-| `Game.ReloadScripts()` | *(tidak ada)* | *(tidak ada)* | Memuat ulang seluruh file script di folder `scripts/` tanpa perlu me-restart game. |
+| `Game.ReloadScripts()` | *(tidak ada)* | *(tidak ada)* | Memuat ulang seluruh file script dan mereset timer tanpa perlu me-restart game. |
 
 ---
 
-### 4. Modul `AMLua`
-Tabel namespace alternatif yang mewadahi seluruh modul di atas:
+### 4. Modul `Timer` (Alternatif Mudah Berbasis Detik)
+Untuk pemula yang tidak ingin pusing menghitung FPS atau menghadapi masalah OnTick yang telat karena frame drop, gunakan modul `Timer` atau fungsi praktis berbasis detik langsung:
+
+```lua
+-- Jalankan setiap 1.5 detik
+local myTimer = Timer.Every(1.5, function()
+    Game.PrintText("~y~Pesan Muncul Setiap 1.5 Detik!", 1000)
+end)
+
+-- Batalkan timer jika sudah selesai
+-- Timer.Clear(myTimer)
+
+-- Jalankan sekali setelah 5 detik
+Timer.After(5.0, function()
+    Game.PrintText("~g~5 Detik Berlalu!", 2000)
+end)
+```
+
+> 💡 **Fleksibilitas Parameter**:
+> Anda bebas menukar urutan parameter: `Game.Every(2.0, fn)` ataupun `Game.Every(fn, 2.0)` keduanya valid dan langsung bekerja tanpa error!
+> Tersedia pula fungsi global praktis: `setInterval`, `setTimeout`, `clearInterval`, `clearTimeout`.
+
+---
+
+### 5. Modul `AMLua`
+Tabel namespace alternatif yang mewadahi seluruh modul:
 - `AMLua.Player` -> identik dengan `Player`
 - `AMLua.Vehicle` -> identik dengan `Vehicle`
 - `AMLua.Game` -> identik dengan `Game`
-- `AMLua.OnTick(callback)` -> identik dengan `Game.OnTick`
-- `AMLua.DoFile(filename)` -> identik dengan `Game.DoFile`
+- `AMLua.Timer` -> modul timer berbasis detik
+- `AMLua.Every(sec, fn)` / `AMLua.After(sec, fn)` -> timer detik praktis
+- `AMLua.OnTick(fn)` -> identik dengan `Game.OnTick`
+- `AMLua.DoFile(path)` -> identik dengan `Game.DoFile`
 - `AMLua.RunString(code)` -> identik dengan `Game.RunString`
-- `AMLua.ReloadScripts()` -> identik dengan `Game.ReloadScripts`
+- `AMLua.ReloadScripts()` -> memuat ulang script & timer
 - `AMLua.ShowScriptList()` -> membuka dialog daftar mod
 - `AMLua.GetLoadedScripts()` -> mengambil array nama mod
-- `AMLua.Version` -> string versi saat ini (misal: `"1.0.3"`)
+- `AMLua.Version` -> string versi saat ini (`"1.0.5"`)
 - `dofile(filename)` -> fungsi global bawaan yang otomatis mencari file di folder `scripts/`
 
 ---
 
-### 5. Daftar Kode Warna & Format Dialog GTA SA
+### 6. Daftar Kode Warna & Format Dialog GTA SA
 Teks yang dimasukkan ke `Game.PrintText()` mendukung kode pemformatan warna native GTA:
 
 | Kode Format | Warna / Efek | Contoh Hasil |
@@ -296,50 +328,64 @@ Mari kita buat script pertama yang akan memunculkan pesan di layar dan menulis p
 
 ---
 
-### Pelajaran 3: Memahami Game Loop (OnTick) & Frame Timing
-Di game GTA San Andreas, gambar di layar di-refresh antara 30 sampai 60 kali per detik (FPS). 
-Fungsi `Game.OnTick` memungkinkan kode Anda dieksekusi pada setiap frame tersebut.
+### Pelajaran 3: Memahami Timer: Game.Every (Detik) vs Game.OnTick (Frame)
 
-> ⚠️ **PENTING: Jangan Gunakan Loop `while true do`!**
-> Di lingkungan game native, loop tak berujung (`while true do ... end`) akan membuat game langsung freeze (hang).
-> Sebagai gantinya, gunakan `Game.OnTick` bersama variabel penghitung frame.
+#### Kenapa `Game.OnTick` dengan Hitungan Frame Suka Telat?
+Di HP Android, FPS game sering kali naik-turun (misalnya dibatasi 30 FPS, atau turun ke 15–20 FPS saat jalanan ramai).
+- Jika Anda membuat kode `if frameCount % 30 == 0`:
+  - Pada 60 FPS: dipanggil setiap **0.5 detik**.
+  - Pada 30 FPS: dipanggil setiap **1.0 detik**.
+  - Pada 15 FPS: dipanggil setiap **2.0 detik (terasa telat/ngelag!)**.
+Bagi pemula, menghitung frame (`frameCount % 30`) sangat bikin pusing dan tidak konsisten.
+
+#### Solusi Terbaik & Paling Mudah: `Game.Every(detik, callback)`
+Gunakan **`Game.Every`**! Timer ini berjalan berdasarkan **waktu nyata (real seconds)** prosesor, bukan hitungan frame. 1 detik akan selalu tepat 1 detik di HP apa pun:
 
 ```lua
--- Contoh menghitung detik menggunakan frame (60 frame ≈ 1 detik)
-local frameCount = 0
+-- Sangat mudah dan ga bikin pusing! Berjalan setiap 1 detik:
+Game.Every(1.0, function()
+    Game.Log("Tepat 1 detik berlalu secara konsisten!")
+end)
 
-Game.OnTick(function()
-    frameCount = frameCount + 1
+-- Ingin delay sekali jalan setelah 3 detik? Pakai Game.After:
+Game.After(3.0, function()
+    Game.PrintText("~g~3 detik telah berlalu!", 2000)
+end)
+```
 
-    -- Setiap 180 frame (kurang lebih 3 detik sekali)
-    if frameCount % 180 == 0 then
-        Game.Log("Sudah 3 detik berlalu di game!")
-    end
+#### Kapan Harus Menggunakan `Game.OnTick`?
+Gunakan `Game.OnTick` jika Anda ingin kode berjalan **setiap kali frame dirender** (misalnya untuk animasi mulus atau manipulasi pergerakan terus-menerus). AMLua v1.0.5 menyertakan parameter **`dt` (delta time)**:
+
+```lua
+Game.OnTick(function(dt)
+    -- dt bernilai sekitar 0.033 detik (pada 30 FPS) atau 0.016 detik (pada 60 FPS)
+    -- Anda bisa menambah timer secara akurat tanpa menghitung frame:
+    -- myTimer = myTimer + dt
 end)
 ```
 
 ---
 
 ### Pelajaran 4: Membuat Mod Godmode (Darah Kebal)
-Sekarang kita akan membuat mod yang menjaga darah dan armor pemain agar tidak pernah berkurang atau mati.
+Sekarang kita buat mod kebal menggunakan `Game.Every(0.5, ...)` yang memeriksa darah setiap setengah detik secara konsisten tanpa lag:
 
 Buat file baru di `scripts/godmode.lua`:
 
 ```lua
 -- scripts/godmode.lua
--- Mod Kebal / Infinite Health & Armour
+-- Mod Kebal / Infinite Health & Armour (Menggunakan Timer Detik)
 
 Game.Log("Mod Godmode diaktifkan.")
 
-Game.OnTick(function()
-    -- 1. Ambil pointer karakter pemain (CJ)
+-- Periksa dan isi darah setiap 0.5 detik
+Game.Every(0.5, function()
     local ped = Player.GetPed()
 
-    -- 2. Pastikan karakter pemain valid dan sudah ada di dunia game
+    -- Pastikan karakter pemain valid dan sudah spawn di dunia game
     if ped ~= nil then
         local currentHP = Player.GetHealth(ped)
 
-        -- 3. Jika darah berkurang di bawah 100, langsung isi kembali
+        -- Jika darah berkurang di bawah 100, langsung isi kembali
         if currentHP < 100.0 and currentHP > 0.0 then
             Player.SetHealth(ped, 200.0) -- Berikan HP ekstra
             Player.SetArmour(ped, 100.0) -- Berikan Armor penuh
@@ -352,7 +398,7 @@ end)
 ---
 
 ### Pelajaran 5: Membuat Mod Auto-Repair Kendaraan
-Mod ini akan mendeteksi ketika HP kendaraan turun karena benturan atau tembakan, lalu otomatis memperbaikinya hingga mulus kembali.
+Mod ini memeriksa kendaraan setiap 1 detik dan otomatis memperbaikinya saat bodi rusak:
 
 Buat file baru di `scripts/autorepair.lua`:
 
@@ -360,19 +406,13 @@ Buat file baru di `scripts/autorepair.lua`:
 -- scripts/autorepair.lua
 -- Mod Auto-Repair Kendaraan
 
-local cekTimer = 0
+Game.Log("Mod Auto-Repair diaktifkan.")
 
-Game.OnTick(function()
-    cekTimer = cekTimer + 1
-
-    -- Cek setiap 30 frame (sekitar setengah detik sekali)
-    if cekTimer % 30 == 0 then
-        local ped = Player.GetPed()
-        if ped ~= nil then
-            -- Catatan: jika ped berada di dalam kendaraan, Anda dapat memanfaatkan
-            -- API Vehicle untuk memperbaiki bodi kendaraan secara instan:
-            -- Vehicle.Repair(vehPtr)
-        end
+Game.Every(1.0, function()
+    local ped = Player.GetPed()
+    if ped ~= nil then
+        -- Jika CJ berada di kendaraan dan bodi penyok/rusak,
+        -- panggil Vehicle.Repair(vehPtr) untuk memuluskan kembali bodi mobil!
     end
 end)
 ```
@@ -475,7 +515,7 @@ Anda tidak perlu lagi ribet mengekstrak file ZIP di HP jika hanya butuh file `.s
      - Unduh **`libAMLua64.so`** jika HP Anda 64-bit (kebanyakan HP Android rilisan 2018 ke atas).
      - Unduh **`libAMLua32.so`** jika HP Anda 32-bit.
    - **Opsi Lengkap (ZIP)**:
-     - Unduh **`AMLua-v1.0.4.zip`** (berisi kedua file binary `.so`, contoh script `test.lua`, dan dokumentasi lengkap).
+     - Unduh **`AMLua-v1.0.5.zip`** (berisi kedua file binary `.so`, contoh script `test.lua`, dan dokumentasi lengkap).
 3. Salin file `.so` yang sesuai ke direktori mods AML game Anda:
    ```text
    /storage/emulated/0/Android/data/com.rockstargames.gtasa/mods/

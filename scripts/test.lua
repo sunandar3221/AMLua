@@ -1,50 +1,71 @@
--- ===================================================
+-- ========================================================================
 -- AMLua Example Test Script: test.lua
 -- Target: GTA San Andreas Android (Android Mod Loader)
--- ===================================================
+-- ========================================================================
 
 Game.Log("=== AMLua test.lua starting ===")
 
--- Print list of loaded scripts to logcat / amlua.log
+-- Tampilkan daftar mod yang dimuat di logcat / amlua.log
 local scripts = AMLua.GetLoadedScripts()
 Game.Log(string.format("AMLua test.lua loaded with %d active script(s):", #scripts))
 for i, name in ipairs(scripts) do
     Game.Log(string.format("  [%d] %s", i, name))
 end
 
-local frameCount = 0
-local healCooldown = 0
+-- ========================================================================
+-- FITUR BARU: Timer Berbasis Detik (Game.Every / Game.After / SetInterval)
+-- Tidak perlu lagi menghitung FPS atau frameCount! Cukup sebutkan detik.
+-- 1 detik selalu tepat 1 detik, baik di HP kentang maupun HP spek tinggi.
+-- ========================================================================
 
--- Register per-frame game loop tick callback
-Game.OnTick(function()
-    frameCount = frameCount + 1
-    if healCooldown > 0 then
-        healCooldown = healCooldown - 1
+local healCooldownSec = 0.0
+
+-- 1. Game.Every(detik, function): Berjalan berulang kali setiap X detik
+Game.Every(1.0, function()
+    -- Kurangi cooldown waktu nyata (1 detik per siklus)
+    if healCooldownSec > 0.0 then
+        healCooldownSec = healCooldownSec - 1.0
     end
 
     local ped = Player.GetPed()
-    if ped ~= nil then
-        -- Periodic condition check (~every 30 frames / 0.5 second)
-        if frameCount % 30 == 0 and healCooldown == 0 then
-            local currentHealth = Player.GetHealth(ped)
+    if ped ~= nil and healCooldownSec <= 0.0 then
+        local currentHealth = Player.GetHealth(ped)
 
-            -- Auto-restore health if injured (below 50 HP)
-            if currentHealth > 0.0 and currentHealth < 50.0 then
-                Player.SetHealth(ped, 100.0)
-                Player.SetArmour(ped, 100.0)
-                healCooldown = 150 -- Cooldown for 5 seconds (~150 frames)
+        -- Pulihkan darah & armor otomatis jika HP kurang dari 50
+        if currentHealth > 0.0 and currentHealth < 50.0 then
+            Player.SetHealth(ped, 100.0)
+            Player.SetArmour(ped, 100.0)
+            healCooldownSec = 5.0 -- Cooldown selama 5 detik
 
-                -- Display in GTA SA native top-right dialog box
-                Game.PrintText("~g~Health Restored to 100!~n~~w~AMLua Auto-Heal Active.", 3000)
-                Game.Log(string.format("Player HP restored from %.1f to 100.0 (Armour set to 100.0)", currentHealth))
-            end
+            -- Tampilkan pesan di dialog pojok kanan atas
+            Game.PrintText("~g~Health Restored to 100!~n~~w~AMLua Auto-Heal (Every 1s).", 3000)
+            Game.Log(string.format("Player HP restored from %.1f to 100.0 via Game.Every(1.0)", currentHealth))
         end
+    end
+end)
 
-        -- Periodic heartbeat log (~every 600 frames / 10 seconds)
-        if frameCount % 600 == 0 then
+-- 2. Game.After(detik, function): Berjalan sekali setelah X detik (delay)
+Game.After(4.0, function()
+    Game.Log("AMLua: 4 detik telah berlalu sejak script dimuat!")
+end)
+
+-- ========================================================================
+-- Game.OnTick tetap didukung dan kini menerima parameter 'dt' (delta time)
+-- dt = durasi waktu nyata (dalam pecahan detik) sejak frame sebelumnya
+-- ========================================================================
+local heartbeatTimer = 0.0
+
+Game.OnTick(function(dt)
+    heartbeatTimer = heartbeatTimer + dt
+
+    -- Log status setiap 10 detik tanpa terpengaruh naik/turunnya FPS
+    if heartbeatTimer >= 10.0 then
+        heartbeatTimer = 0.0
+        local ped = Player.GetPed()
+        if ped ~= nil then
             local hp = Player.GetHealth(ped)
             local arm = Player.GetArmour(ped)
-            Game.Log(string.format("[Tick Status] Frame: %d | Ped: %s | HP: %.1f | Armour: %.1f", frameCount, tostring(ped), hp, arm))
+            Game.Log(string.format("[Heartbeat] CJ Status | HP: %.1f | Armour: %.1f | Frame Delta: %.3fs", hp, arm, dt))
         end
     end
 end)

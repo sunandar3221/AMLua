@@ -15,6 +15,7 @@
 #include <vector>
 #include <string>
 #include <algorithm>
+#include <chrono>
 
 #define LOG_TAG "AMLua"
 
@@ -482,6 +483,120 @@ namespace AMLua
         return 0;
     }
 
+    // -------------------------------------------------------------
+    // Real-Time Timer & Interval Subsystem (Seconds-based)
+    // -------------------------------------------------------------
+    struct LuaTimer
+    {
+        int id;
+        int luaFuncRef;      // reference in LUA_REGISTRYINDEX
+        double intervalSec;  // duration in real seconds
+        double remainingSec; // count down in real seconds
+        bool isRepeating;    // true for SetInterval / Every, false for SetTimeout / After
+        bool isAlive;        // true if active
+    };
+
+    static std::vector<LuaTimer> g_ActiveTimers;
+    static int g_NextTimerId = 1;
+
+    static void ClearAllTimers(lua_State* L)
+    {
+        if (!L) return;
+        for (auto& t : g_ActiveTimers)
+        {
+            if (t.isAlive && t.luaFuncRef != LUA_NOREF && t.luaFuncRef != LUA_REFNIL)
+            {
+                luaL_unref(L, LUA_REGISTRYINDEX, t.luaFuncRef);
+                t.luaFuncRef = LUA_NOREF;
+            }
+            t.isAlive = false;
+        }
+        g_ActiveTimers.clear();
+    }
+
+    // Flexible timer creation helper: accepts (fn, seconds) or (seconds, fn)
+    static int CreateTimerHelper(lua_State* L, bool isRepeating)
+    {
+        int fnIndex = -1;
+        double seconds = 0.0;
+
+        if (lua_isfunction(L, 1) && lua_isnumber(L, 2))
+        {
+            fnIndex = 1;
+            seconds = (double)lua_tonumber(L, 2);
+        }
+        else if (lua_isnumber(L, 1) && lua_isfunction(L, 2))
+        {
+            seconds = (double)lua_tonumber(L, 1);
+            fnIndex = 2;
+        }
+        else if (lua_isfunction(L, 1) && lua_gettop(L) == 1)
+        {
+            fnIndex = 1;
+            seconds = 1.0; // default 1.0s if omitted
+        }
+        else
+        {
+            return luaL_error(L, "Timer expected (function, seconds) or (seconds, function)");
+        }
+
+        if (seconds < 0.001)
+        {
+            seconds = 0.001; // Clamp to min 1ms to prevent zero-interval loops
+        }
+
+        lua_pushvalue(L, fnIndex);
+        int ref = luaL_ref(L, LUA_REGISTRYINDEX);
+
+        LuaTimer timer;
+        timer.id = g_NextTimerId++;
+        timer.luaFuncRef = ref;
+        timer.intervalSec = seconds;
+        timer.remainingSec = seconds;
+        timer.isRepeating = isRepeating;
+        timer.isAlive = true;
+
+        g_ActiveTimers.push_back(timer);
+
+        lua_pushinteger(L, timer.id);
+        return 1;
+    }
+
+    // Game.SetInterval(fn, seconds) / Game.Every(seconds, fn)
+    static int Lua_Game_SetInterval(lua_State* L)
+    {
+        return CreateTimerHelper(L, true);
+    }
+
+    // Game.SetTimeout(fn, seconds) / Game.After(seconds, fn)
+    static int Lua_Game_SetTimeout(lua_State* L)
+    {
+        return CreateTimerHelper(L, false);
+    }
+
+    // Game.ClearTimer(id) / Game.ClearInterval(id) / Game.ClearTimeout(id)
+    static int Lua_Game_ClearTimer(lua_State* L)
+    {
+        int timerId = (int)luaL_checkinteger(L, 1);
+        bool found = false;
+        for (auto& t : g_ActiveTimers)
+        {
+            if (t.id == timerId && t.isAlive)
+            {
+                t.isAlive = false;
+                if (t.luaFuncRef != LUA_NOREF && t.luaFuncRef != LUA_REFNIL)
+                {
+                    luaL_unref(L, LUA_REGISTRYINDEX, t.luaFuncRef);
+                    t.luaFuncRef = LUA_NOREF;
+                }
+                found = true;
+                break;
+            }
+        }
+        lua_pushboolean(L, found ? 1 : 0);
+        return 1;
+    }
+
     // Return list of loaded scripts to Lua as an array of strings
     static int Lua_GetLoadedScripts(lua_State* L)
     {
@@ -618,7 +733,9 @@ namespace AMLua
     // Reloads all Lua scripts on the fly
     static int Lua_ReloadScripts(lua_State* L)
     {
-        // Clear tick callbacks
+        // Clear active timers and tick callbacks from previous session
+        ClearAllTimers(L);
+
         lua_pushnil(L);
         lua_setfield(L, LUA_REGISTRYINDEX, "AMLua_TickCallbacks");
 
@@ -770,6 +887,23 @@ namespace AMLua
         lua_setfield(L, -2, "Log");
         lua_pushcfunction(L, Lua_RegisterTick);
         lua_setfield(L, -2, "OnTick");
+
+        // Seconds-based real-time timers
+        lua_pushcfunction(L, Lua_Game_SetInterval);
+        lua_setfield(L, -2, "SetInterval");
+        lua_pushcfunction(L, Lua_Game_SetInterval);
+        lua_setfield(L, -2, "Every");
+        lua_pushcfunction(L, Lua_Game_SetTimeout);
+        lua_setfield(L, -2, "SetTimeout");
+        lua_pushcfunction(L, Lua_Game_SetTimeout);
+        lua_setfield(L, -2, "After");
+        lua_pushcfunction(L, Lua_Game_ClearTimer);
+        lua_setfield(L, -2, "ClearTimer");
+        lua_pushcfunction(L, Lua_Game_ClearTimer);
+        lua_setfield(L, -2, "ClearInterval");
+        lua_pushcfunction(L, Lua_Game_ClearTimer);
+        lua_setfield(L, -2, "ClearTimeout");
+
         lua_pushcfunction(L, Lua_GetLoadedScripts);
         lua_setfield(L, -2, "GetLoadedScripts");
         lua_pushcfunction(L, Lua_ShowScriptList);
@@ -782,12 +916,47 @@ namespace AMLua
         lua_setfield(L, -2, "ReloadScripts");
         lua_setglobal(L, "Game");
 
+        // Table: Timer (Dedicated easy timer namespace)
+        lua_newtable(L);
+        lua_pushcfunction(L, Lua_Game_SetInterval);
+        lua_setfield(L, -2, "SetInterval");
+        lua_pushcfunction(L, Lua_Game_SetInterval);
+        lua_setfield(L, -2, "Every");
+        lua_pushcfunction(L, Lua_Game_SetTimeout);
+        lua_setfield(L, -2, "SetTimeout");
+        lua_pushcfunction(L, Lua_Game_SetTimeout);
+        lua_setfield(L, -2, "After");
+        lua_pushcfunction(L, Lua_Game_ClearTimer);
+        lua_setfield(L, -2, "Clear");
+        lua_pushcfunction(L, Lua_Game_ClearTimer);
+        lua_setfield(L, -2, "ClearInterval");
+        lua_pushcfunction(L, Lua_Game_ClearTimer);
+        lua_setfield(L, -2, "ClearTimeout");
+        lua_setglobal(L, "Timer");
+
         // Table: AMLua (contains version, mod list inspection, and direct module references)
         lua_newtable(L);
-        lua_pushstring(L, "1.0.3");
+        lua_pushstring(L, "1.0.5");
         lua_setfield(L, -2, "Version");
         lua_pushcfunction(L, Lua_RegisterTick);
         lua_setfield(L, -2, "OnTick");
+
+        // Seconds-based real-time timers
+        lua_pushcfunction(L, Lua_Game_SetInterval);
+        lua_setfield(L, -2, "SetInterval");
+        lua_pushcfunction(L, Lua_Game_SetInterval);
+        lua_setfield(L, -2, "Every");
+        lua_pushcfunction(L, Lua_Game_SetTimeout);
+        lua_setfield(L, -2, "SetTimeout");
+        lua_pushcfunction(L, Lua_Game_SetTimeout);
+        lua_setfield(L, -2, "After");
+        lua_pushcfunction(L, Lua_Game_ClearTimer);
+        lua_setfield(L, -2, "ClearTimer");
+        lua_pushcfunction(L, Lua_Game_ClearTimer);
+        lua_setfield(L, -2, "ClearInterval");
+        lua_pushcfunction(L, Lua_Game_ClearTimer);
+        lua_setfield(L, -2, "ClearTimeout");
+
         lua_pushcfunction(L, Lua_GetLoadedScripts);
         lua_setfield(L, -2, "GetLoadedScripts");
         lua_pushcfunction(L, Lua_ShowScriptList);
@@ -803,19 +972,33 @@ namespace AMLua
         lua_pushcfunction(L, Lua_ReloadScripts);
         lua_setfield(L, -2, "ReloadScripts");
 
-        // Reference Player, Vehicle, Game inside AMLua as well
+        // Reference Player, Vehicle, Game, Timer inside AMLua as well
         lua_getglobal(L, "Player");
         lua_setfield(L, -2, "Player");
         lua_getglobal(L, "Vehicle");
         lua_setfield(L, -2, "Vehicle");
         lua_getglobal(L, "Game");
         lua_setfield(L, -2, "Game");
+        lua_getglobal(L, "Timer");
+        lua_setfield(L, -2, "Timer");
 
         lua_setglobal(L, "AMLua");
 
         // Global dofile override so scripts can call dofile("myscript.lua") directly
         lua_pushcfunction(L, Lua_Game_DoFile);
         lua_setglobal(L, "dofile");
+
+        // Global timer aliases for standard JavaScript / browser / game familiarity
+        lua_pushcfunction(L, Lua_Game_SetInterval);
+        lua_setglobal(L, "setInterval");
+        lua_pushcfunction(L, Lua_Game_SetTimeout);
+        lua_setglobal(L, "setTimeout");
+        lua_pushcfunction(L, Lua_Game_ClearTimer);
+        lua_setglobal(L, "clearInterval");
+        lua_pushcfunction(L, Lua_Game_ClearTimer);
+        lua_setglobal(L, "clearTimeout");
+        lua_pushcfunction(L, Lua_Game_ClearTimer);
+        lua_setglobal(L, "clearTimer");
     }
 
     void Init(uintptr_t libGTASA)
@@ -911,6 +1094,7 @@ namespace AMLua
     {
         if (g_LuaState)
         {
+            ClearAllTimers(g_LuaState);
             lua_close(g_LuaState);
             g_LuaState = nullptr;
             Log("Lua VM shut down.");
@@ -1016,7 +1200,24 @@ namespace AMLua
     {
         if (!g_LuaState) return;
 
-        // Display initial greeting dialog once player is active and world is stabilized (~90 frames / 3 seconds)
+        // Calculate delta time in real seconds using high-precision steady_clock
+        static auto s_LastTickTime = std::chrono::steady_clock::now();
+        static bool s_HasLastTickTime = false;
+
+        auto now = std::chrono::steady_clock::now();
+        if (!s_HasLastTickTime)
+        {
+            s_LastTickTime = now;
+            s_HasLastTickTime = true;
+        }
+        double dt = std::chrono::duration<double>(now - s_LastTickTime).count();
+        s_LastTickTime = now;
+
+        // Clamp dt between 0.0001s and 0.5s to prevent huge jumps across pause/loading screens
+        if (dt <= 0.0) dt = 0.0166;
+        if (dt > 0.5)  dt = 0.0333;
+
+        // Display initial greeting dialog once player is active and world is stabilized (~30 frames)
         if (!s_InitialGreetingShown && pfnFindPlayerPed)
         {
             void* ped = pfnFindPlayerPed(-1);
@@ -1036,6 +1237,102 @@ namespace AMLua
             }
         }
 
+        // 1. Process Seconds-Based Timers (Game.Every, Game.After, SetInterval, SetTimeout)
+        if (!g_ActiveTimers.empty())
+        {
+            struct TriggeredTimer
+            {
+                int id;
+                int luaFuncRef;
+                bool isRepeating;
+            };
+            std::vector<TriggeredTimer> triggered;
+            bool hasDeadTimers = false;
+
+            for (auto& t : g_ActiveTimers)
+            {
+                if (!t.isAlive)
+                {
+                    hasDeadTimers = true;
+                    continue;
+                }
+
+                t.remainingSec -= dt;
+                if (t.remainingSec <= 0.0)
+                {
+                    if (t.isRepeating)
+                    {
+                        t.remainingSec += t.intervalSec;
+                        if (t.remainingSec <= 0.0)
+                        {
+                            t.remainingSec = t.intervalSec;
+                        }
+                    }
+                    else
+                    {
+                        t.isAlive = false;
+                        hasDeadTimers = true;
+                    }
+
+                    triggered.push_back({t.id, t.luaFuncRef, t.isRepeating});
+                }
+            }
+
+            // Execute triggered timers safely (isolated from vector resizing)
+            for (const auto& trig : triggered)
+            {
+                if (trig.luaFuncRef != LUA_NOREF && trig.luaFuncRef != LUA_REFNIL)
+                {
+                    char timerAction[64];
+                    snprintf(timerAction, sizeof(timerAction), "Timer #%d Callback", trig.id);
+                    CrashHandler::SetCurrentAction(timerAction);
+
+                    lua_pushcfunction(g_LuaState, Lua_TracebackHandler);
+                    int errH = lua_gettop(g_LuaState);
+
+                    lua_rawgeti(g_LuaState, LUA_REGISTRYINDEX, trig.luaFuncRef);
+                    if (lua_isfunction(g_LuaState, -1))
+                    {
+                        // Pass dt (seconds) to timer callback as parameter
+                        lua_pushnumber(g_LuaState, (lua_Number)dt);
+
+                        if (lua_pcall(g_LuaState, 1, 0, errH) != LUA_OK)
+                        {
+                            const char* err = lua_tostring(g_LuaState, -1);
+                            Log("[Timer Error #%d]: %s", trig.id, err ? err : "Runtime error");
+                            CrashHandler::LogError("[Timer Error #%d]: %s", trig.id, err ? err : "Runtime error");
+                            lua_pop(g_LuaState, 1);
+                        }
+                    }
+                    else
+                    {
+                        lua_pop(g_LuaState, 1);
+                    }
+
+                    lua_pop(g_LuaState, 1); // pop errH
+                }
+
+                if (!trig.isRepeating)
+                {
+                    if (trig.luaFuncRef != LUA_NOREF && trig.luaFuncRef != LUA_REFNIL)
+                    {
+                        luaL_unref(g_LuaState, LUA_REGISTRYINDEX, trig.luaFuncRef);
+                    }
+                }
+            }
+
+            // Clean up inactive/expired timers
+            if (hasDeadTimers)
+            {
+                g_ActiveTimers.erase(
+                    std::remove_if(g_ActiveTimers.begin(), g_ActiveTimers.end(),
+                        [](const LuaTimer& t) { return !t.isAlive; }),
+                    g_ActiveTimers.end()
+                );
+            }
+        }
+
+        // 2. Process Game.OnTick Frame Callbacks (Passes delta time 'dt' to callback)
         CrashHandler::SetCurrentAction("Processing Tick Callbacks");
 
         lua_pushcfunction(g_LuaState, Lua_TracebackHandler);
@@ -1054,7 +1351,10 @@ namespace AMLua
                     snprintf(actBuf, sizeof(actBuf), "Tick Callback #%d", i);
                     CrashHandler::SetCurrentAction(actBuf);
 
-                    if (lua_pcall(g_LuaState, 0, 0, errHandler) != LUA_OK)
+                    // Pass delta time 'dt' (real seconds elapsed) to callback
+                    lua_pushnumber(g_LuaState, (lua_Number)dt);
+
+                    if (lua_pcall(g_LuaState, 1, 0, errHandler) != LUA_OK)
                     {
                         const char* err = lua_tostring(g_LuaState, -1);
                         Log("[Tick Callback Error #%d]:\n%s", i, err ? err : "Unknown tick error");
