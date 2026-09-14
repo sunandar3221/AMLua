@@ -78,8 +78,19 @@ namespace AMLua
     typedef void  (*VehicleFix_t)(void* vehicle);
     typedef void  (*VehicleBlowUp_t)(void* vehicle, void* culprit, unsigned char flags);
     typedef void  (*EntityTeleport_t)(void* entity, CVector dest, bool resetRotation);
-    typedef void  (*AddExplosion_t)(void* victim, void* creator, int type, const CVector& pos, unsigned int time, bool makeSound, float camShake, bool bInvisible);
-    typedef void  (*TriggerExplosion_t)(const CVector& pos, float radius, float visibleDistance, void* victim, void* creator, bool processVehicleBombTimer, float damage);
+    // SCM Script Engine & Explosion Function Signatures
+    typedef int8_t (*ProcessOneCommand_t)(void* script);
+    typedef int8_t (*ProcessCommands_t)(void* script, int commandID);
+    typedef void   (*ScriptInit_t)(void* script);
+
+    // Direct CExplosion signatures:
+    // 1. By-value CVector (float x, float y, float z) - matches ARM32 0x5A70D0 and Itanium 7CVector mangling
+    typedef void (*AddExplosionByVal_t)(void* victim, void* creator, int type, float x, float y, float z, bool makeSound, bool moveable, float camShake);
+    // 2. Soundless explosion - matches ARM32 0x5A7220
+    typedef void (*AddSoundlessExplosion_t)(float x, float y, float z, int type);
+    // 3. By-ref const CVector&
+    typedef void (*AddExplosionByRef_t)(void* victim, void* creator, int type, const CVector& pos, unsigned int time, bool makeSound, float camShake, bool bInvisible);
+    typedef void (*TriggerExplosion_t)(const CVector& pos, float radius, float visibleDistance, void* victim, void* creator, bool processVehicleBombTimer, float damage);
     typedef void* (*FindPlayerInfo_t)(int playerNum);
     typedef float (*FindGroundZForCoord_t)(float x, float y);
     typedef float (*FindGroundZFor3DCoord_t)(float x, float y, float z, bool* pBool, void** ppEnt);
@@ -103,7 +114,14 @@ namespace AMLua
     static VehicleFix_t            pfnVehicleFix = nullptr;
     static VehicleBlowUp_t         pfnVehicleBlowUp = nullptr;
     static EntityTeleport_t        pfnEntityTeleport = nullptr;
-    static AddExplosion_t          pfnAddExplosion = nullptr;
+    static ProcessOneCommand_t     pfnProcessOneCommand = nullptr;
+    static ProcessCommands_t       pfnProcessCommands200To299 = nullptr;
+    static ProcessCommands_t       pfnProcessCommands500To599 = nullptr;
+    static ProcessCommands_t       pfnProcessCommands900To999 = nullptr;
+    static ScriptInit_t            pfnScriptInit = nullptr;
+    static AddExplosionByVal_t     pfnAddExplosionByVal = nullptr;
+    static AddSoundlessExplosion_t pfnAddSoundlessExp = nullptr;
+    static AddExplosionByRef_t     pfnAddExplosionByRef = nullptr;
     static TriggerExplosion_t      pfnTriggerExplosion = nullptr;
     static FindGroundZForCoord_t   pfnFindGroundZForCoord = nullptr;
     static FindGroundZFor3DCoord_t pfnFindGroundZFor3DCoord = nullptr;
@@ -420,14 +438,198 @@ namespace AMLua
         return true;
     }
 
-    // Helper to create explosion via game engine
+    // Script runner structure matching GTA SA Android CRunningScript layout (aml-psdk)
+    union ScriptParam
+    {
+        unsigned int uParam;
+        int iParam;
+        float fParam;
+        void* pParam;
+    };
+
+    struct alignas(16) ScriptRunner
+    {
+        void*           m_pNext;
+        void*           m_pPrev;
+        char            m_szName[8];
+        unsigned char*  m_pBaseIP;
+        unsigned char*  m_pCurrentIP;
+        unsigned char*  m_apStack[8];
+        unsigned short  m_nSP;
+        #ifndef AML32
+        unsigned short  m_nPad64_1;
+        unsigned int    m_nPad64_2;
+        #endif
+        ScriptParam     m_aLocalVars[40];
+        int             m_anTimers[2];
+        bool            m_bIsActive;
+        bool            m_bCondResult;
+        bool            m_bUseMissionCleanup;
+        bool            m_bIsExternal;
+        bool            m_bTextBlockOverride;
+        char            m_nScriptBrainType;
+        int             m_nWakeTime;
+        unsigned short  m_nLogicalOp;
+        bool            m_bNotFlag;
+        bool            m_bWastedBustedCheck;
+        bool            m_bWastedOrBusted;
+        int             m_pSceneSkipIP;
+        bool            m_bIsMission;
+        char            m_safetyPadding[256];
+    };
+
+    // Helper to create explosion via game engine with full visual effects & physics
     static bool CreateExplosionInternal(float x, float y, float z, int type, float radius, bool makeSound, float camShake)
     {
         CVector pos = { x, y, z };
+        bool visualTriggered = false;
+
+        // Method 1: SCM Opcode Execution via CRunningScript
+        // Opcode 020C (ADD_EXPLOSION) or 0948 (ADD_EXPLOSION_VARIABLE_SHAKE) or 0565 (ADD_EXPLOSION_NO_SOUND)
+        // This executes Rockstar's native script opcode that generates the full RenderWare 3D
+        // animated fireball mesh, dynamic point light, smoke particle clouds, scorch mark, and audio!
+        if (pfnProcessOneCommand || pfnProcessCommands200To299)
+        {
+            static ScriptRunner s_Script;
+            static bool s_ScriptInited = false;
+            if (!s_ScriptInited)
+            {
+                memset(&s_Script, 0, sizeof(s_Script));
+                strncpy(s_Script.m_szName, "amlua", sizeof(s_Script.m_szName) - 1);
+                if (pfnScriptInit)
+                {
+                    pfnScriptInit(&s_Script);
+                }
+                s_ScriptInited = true;
+            }
+
+            alignas(16) uint8_t cmdBuffer[64] = {0};
+            s_Script.m_bIsActive = true;
+            s_Script.m_nScriptBrainType = -1;
+            s_Script.m_bWastedBustedCheck = true;
+            s_Script.m_nSP = 0;
+
+            if (!makeSound && (pfnProcessCommands500To599 || pfnProcessOneCommand))
+            {
+                // Opcode 0565: add_explosion_no_sound x y z type
+                uint16_t opcode = 0x0565;
+                memcpy(&cmdBuffer[0], &opcode, 2);
+                cmdBuffer[2] = 0x06; // SCRIPTPARAM_STATIC_FLOAT
+                memcpy(&cmdBuffer[3], &x, 4);
+                cmdBuffer[7] = 0x06;
+                memcpy(&cmdBuffer[8], &y, 4);
+                cmdBuffer[12] = 0x06;
+                memcpy(&cmdBuffer[13], &z, 4);
+                cmdBuffer[17] = 0x01; // SCRIPTPARAM_STATIC_INT_32BITS
+                memcpy(&cmdBuffer[18], &type, 4);
+                cmdBuffer[22] = 0x00; // SCRIPTPARAM_END_OF_ARGUMENTS
+
+                if (pfnProcessOneCommand)
+                {
+                    s_Script.m_pBaseIP = cmdBuffer;
+                    s_Script.m_pCurrentIP = cmdBuffer;
+                    pfnProcessOneCommand(&s_Script);
+                    visualTriggered = true;
+                }
+                else if (pfnProcessCommands500To599)
+                {
+                    s_Script.m_pBaseIP = cmdBuffer;
+                    s_Script.m_pCurrentIP = cmdBuffer + 2;
+                    pfnProcessCommands500To599(&s_Script, 0x0565);
+                    visualTriggered = true;
+                }
+            }
+            else if (camShake > 0.0f && camShake != 1.0f && (pfnProcessCommands900To999 || pfnProcessOneCommand))
+            {
+                // Opcode 0948: add_explosion_variable_shake x y z type shake
+                uint16_t opcode = 0x0948;
+                memcpy(&cmdBuffer[0], &opcode, 2);
+                cmdBuffer[2] = 0x06;
+                memcpy(&cmdBuffer[3], &x, 4);
+                cmdBuffer[7] = 0x06;
+                memcpy(&cmdBuffer[8], &y, 4);
+                cmdBuffer[12] = 0x06;
+                memcpy(&cmdBuffer[13], &z, 4);
+                cmdBuffer[17] = 0x01;
+                memcpy(&cmdBuffer[18], &type, 4);
+                cmdBuffer[22] = 0x06;
+                memcpy(&cmdBuffer[23], &camShake, 4);
+                cmdBuffer[27] = 0x00;
+
+                if (pfnProcessOneCommand)
+                {
+                    s_Script.m_pBaseIP = cmdBuffer;
+                    s_Script.m_pCurrentIP = cmdBuffer;
+                    pfnProcessOneCommand(&s_Script);
+                    visualTriggered = true;
+                }
+                else if (pfnProcessCommands900To999)
+                {
+                    s_Script.m_pBaseIP = cmdBuffer;
+                    s_Script.m_pCurrentIP = cmdBuffer + 2;
+                    pfnProcessCommands900To999(&s_Script, 0x0948);
+                    visualTriggered = true;
+                }
+            }
+            else
+            {
+                // Opcode 020C: add_explosion x y z type
+                uint16_t opcode = 0x020C;
+                memcpy(&cmdBuffer[0], &opcode, 2);
+                cmdBuffer[2] = 0x06;
+                memcpy(&cmdBuffer[3], &x, 4);
+                cmdBuffer[7] = 0x06;
+                memcpy(&cmdBuffer[8], &y, 4);
+                cmdBuffer[12] = 0x06;
+                memcpy(&cmdBuffer[13], &z, 4);
+                cmdBuffer[17] = 0x01;
+                memcpy(&cmdBuffer[18], &type, 4);
+                cmdBuffer[22] = 0x00;
+
+                if (pfnProcessOneCommand)
+                {
+                    s_Script.m_pBaseIP = cmdBuffer;
+                    s_Script.m_pCurrentIP = cmdBuffer;
+                    pfnProcessOneCommand(&s_Script);
+                    visualTriggered = true;
+                }
+                else if (pfnProcessCommands200To299)
+                {
+                    s_Script.m_pBaseIP = cmdBuffer;
+                    s_Script.m_pCurrentIP = cmdBuffer + 2;
+                    pfnProcessCommands200To299(&s_Script, 0x020C);
+                    visualTriggered = true;
+                }
+            }
+        }
+
+        // Method 2: Direct CExplosion::AddExplosion (By-Value CVector / x, y, z floats)
+        if (!visualTriggered && pfnAddExplosionByVal)
+        {
+            pfnAddExplosionByVal(nullptr, nullptr, type, x, y, z, makeSound, false, camShake > 0.0f ? camShake : 1.0f);
+            visualTriggered = true;
+        }
+
+        // Method 3: Direct Soundless (if makeSound is false)
+        if (!visualTriggered && !makeSound && pfnAddSoundlessExp)
+        {
+            pfnAddSoundlessExp(x, y, z, type);
+            visualTriggered = true;
+        }
+
+        // Method 4: Direct CExplosion::AddExplosion (By-Ref const CVector&)
+        if (!visualTriggered && pfnAddExplosionByRef)
+        {
+            pfnAddExplosionByRef(nullptr, nullptr, type, pos, 0, makeSound, camShake, false);
+            visualTriggered = true;
+        }
+
+        // Method 5: CWorld::TriggerExplosion (Physics impulse, vehicle push, sector damage)
+        // In GTA SA, TriggerExplosion is responsible for spatial physics knockback,
+        // camera shake, and entity damage in sectors. Calling this along with the visual
+        // explosion ensures that both the fireball/smoke AND the damage/impulse occur!
         if (pfnTriggerExplosion)
         {
-            // CWorld::TriggerExplosion(const CVector& pos, float radius, float visibleDistance, CEntity* victim, CEntity* creator, bool processVehicleBombTimer, float damage)
-            // Note: visibleDistance must be sufficiently large (e.g. 350.0f) so the engine renders the fireball and particle FX even at distance!
             float visibleDistance = 350.0f;
             if (visibleDistance < radius * 35.0f) visibleDistance = radius * 35.0f;
             float damage = (radius > 0.0f) ? (radius * 10.0f) : 100.0f;
@@ -435,14 +637,8 @@ namespace AMLua
             pfnTriggerExplosion(pos, radius, visibleDistance, nullptr, nullptr, processVehicleBombTimer, damage);
             return true;
         }
-        else if (pfnAddExplosion)
-        {
-            // CExplosion::AddExplosion(CEntity* victim, CEntity* creator, eExplosionType type, const CVector& pos, unsigned int time, bool makeSound, float camShake, bool bInvisible)
-            pfnAddExplosion(nullptr, nullptr, type, pos, 0, makeSound, camShake, false);
-            return true;
-        }
-        Log("[Explosion] No explosion function available");
-        return false;
+
+        return visualTriggered;
     }
 
     // ==========================================
@@ -2317,12 +2513,40 @@ namespace AMLua
             if (!pfnEntityTeleport) pfnEntityTeleport = (EntityTeleport_t)aml->GetSym(g_pGTASA, "_ZN7CEntity8TeleportE7CVector");
             Log("Symbol CEntity::Teleport: %p", (void*)pfnEntityTeleport);
 
-            // 10. CExplosion::AddExplosion & CWorld::TriggerExplosion
-            pfnAddExplosion = (AddExplosion_t)aml->GetSym(g_pGTASA, "_ZN10CExplosion12AddExplosionEP7CEntityS1_14eExplosionTypeRK7CVectorjbfb");
-            if (!pfnAddExplosion) pfnAddExplosion = (AddExplosion_t)aml->GetSym(g_pGTASA, "_ZN10CExplosion12AddExplosionEP7CEntityS1_14eExplosionTypeRK7CVectorjbf");
-            if (!pfnAddExplosion) pfnAddExplosion = (AddExplosion_t)aml->GetSym(g_pGTASA, "_ZN10CExplosion12AddExplosionEP7CEntityS1_iRK7CVectorjbfb");
-            if (!pfnAddExplosion) pfnAddExplosion = (AddExplosion_t)aml->GetSym(g_pGTASA, "_ZN10CExplosion12AddExplosionEP7CEntityS1_iRK7CVectorjbf");
-            Log("Symbol CExplosion::AddExplosion: %p", (void*)pfnAddExplosion);
+            // 10. SCM Script Engine & CExplosion for Visual Explosions
+            pfnProcessOneCommand = (ProcessOneCommand_t)aml->GetSym(g_pGTASA, "_ZN14CRunningScript17ProcessOneCommandEv");
+            pfnProcessCommands200To299 = (ProcessCommands_t)aml->GetSym(g_pGTASA, "_ZN14CRunningScript23ProcessCommands200To299Ei");
+            pfnProcessCommands500To599 = (ProcessCommands_t)aml->GetSym(g_pGTASA, "_ZN14CRunningScript23ProcessCommands500To599Ei");
+            pfnProcessCommands900To999 = (ProcessCommands_t)aml->GetSym(g_pGTASA, "_ZN14CRunningScript23ProcessCommands900To999Ei");
+            pfnScriptInit = (ScriptInit_t)aml->GetSym(g_pGTASA, "_ZN14CRunningScript4InitEv");
+            Log("Symbol CRunningScript::ProcessOneCommand: %p", (void*)pfnProcessOneCommand);
+            Log("Symbol CRunningScript::ProcessCommands200To299: %p", (void*)pfnProcessCommands200To299);
+
+            // CExplosion::AddExplosion (By-Value CVector: float x, float y, float z)
+            pfnAddExplosionByVal = (AddExplosionByVal_t)aml->GetSym(g_pGTASA, "_ZN10CExplosion12AddExplosionEP7CEntityS1_14eExplosionType7CVectorbbf");
+            if (!pfnAddExplosionByVal) pfnAddExplosionByVal = (AddExplosionByVal_t)aml->GetSym(g_pGTASA, "_ZN10CExplosion12AddExplosionEP7CEntityS1_i7CVectorbbf");
+            if (!pfnAddExplosionByVal) pfnAddExplosionByVal = (AddExplosionByVal_t)aml->GetSym(g_pGTASA, "_ZN10CExplosion12AddExplosionEP7CEntityS1_14eExplosionType7CVectorjbfb");
+            if (!pfnAddExplosionByVal) pfnAddExplosionByVal = (AddExplosionByVal_t)aml->GetSym(g_pGTASA, "_ZN10CExplosion12AddExplosionEP7CEntityS1_14eExplosionType7CVectorjbf");
+            if (!pfnAddExplosionByVal) pfnAddExplosionByVal = (AddExplosionByVal_t)aml->GetSym(g_pGTASA, "_ZN10CExplosion12AddExplosionEP7CEntityS1_14eExplosionType7CVectorjb");
+            if (!pfnAddExplosionByVal) pfnAddExplosionByVal = (AddExplosionByVal_t)aml->GetSym(g_pGTASA, "_ZN10CExplosion12AddExplosionEP7CEntityS1_14eExplosionType7CVectorj");
+            if (!pfnAddExplosionByVal) pfnAddExplosionByVal = (AddExplosionByVal_t)aml->GetSym(g_pGTASA, "_ZN10CExplosion12AddExplosionEP7CEntityS1_i7CVectorjbfb");
+            if (!pfnAddExplosionByVal) pfnAddExplosionByVal = (AddExplosionByVal_t)aml->GetSym(g_pGTASA, "_ZN10CExplosion12AddExplosionEP7CEntityS1_i7CVectorjbf");
+            if (!pfnAddExplosionByVal) pfnAddExplosionByVal = (AddExplosionByVal_t)aml->GetSym(g_pGTASA, "_ZN10CExplosion12AddExplosionEP7CEntityS1_i7CVectorjb");
+            if (!pfnAddExplosionByVal) pfnAddExplosionByVal = (AddExplosionByVal_t)aml->GetSym(g_pGTASA, "_ZN10CExplosion12AddExplosionEP7CEntityS1_i7CVectorj");
+            #ifdef AML32
+            if (!pfnAddExplosionByVal) pfnAddExplosionByVal = (AddExplosionByVal_t)(g_pGTASA + 0x5A70D0);
+            if (!pfnAddSoundlessExp)   pfnAddSoundlessExp   = (AddSoundlessExplosion_t)(g_pGTASA + 0x5A7220);
+            #endif
+            Log("Symbol CExplosion::AddExplosion (ByVal): %p", (void*)pfnAddExplosionByVal);
+
+            // CExplosion::AddExplosion (By-Ref const CVector&)
+            pfnAddExplosionByRef = (AddExplosionByRef_t)aml->GetSym(g_pGTASA, "_ZN10CExplosion12AddExplosionEP7CEntityS1_14eExplosionTypeRK7CVectorjbfb");
+            if (!pfnAddExplosionByRef) pfnAddExplosionByRef = (AddExplosionByRef_t)aml->GetSym(g_pGTASA, "_ZN10CExplosion12AddExplosionEP7CEntityS1_14eExplosionTypeRK7CVectorjbf");
+            if (!pfnAddExplosionByRef) pfnAddExplosionByRef = (AddExplosionByRef_t)aml->GetSym(g_pGTASA, "_ZN10CExplosion12AddExplosionEP7CEntityS1_14eExplosionTypeRK7CVectorjb");
+            if (!pfnAddExplosionByRef) pfnAddExplosionByRef = (AddExplosionByRef_t)aml->GetSym(g_pGTASA, "_ZN10CExplosion12AddExplosionEP7CEntityS1_iRK7CVectorjbfb");
+            if (!pfnAddExplosionByRef) pfnAddExplosionByRef = (AddExplosionByRef_t)aml->GetSym(g_pGTASA, "_ZN10CExplosion12AddExplosionEP7CEntityS1_iRK7CVectorjbf");
+            if (!pfnAddExplosionByRef) pfnAddExplosionByRef = (AddExplosionByRef_t)aml->GetSym(g_pGTASA, "_ZN10CExplosion12AddExplosionEP7CEntityS1_iRK7CVectorjb");
+            Log("Symbol CExplosion::AddExplosion (ByRef): %p", (void*)pfnAddExplosionByRef);
 
             pfnTriggerExplosion = (TriggerExplosion_t)aml->GetSym(g_pGTASA, "_ZN6CWorld16TriggerExplosionERK7CVectorffP7CEntityS4_bf");
             Log("Symbol CWorld::TriggerExplosion: %p", (void*)pfnTriggerExplosion);

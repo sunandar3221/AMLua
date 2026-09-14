@@ -1,5 +1,5 @@
 -- ========================================================================
--- AMLua Example Test Script: test.lua (v1.0.8)
+-- AMLua Example Test Script: test.lua (v1.0.9)
 -- Target: GTA San Andreas Android (Android Mod Loader)
 -- Menguji fitur:
 --   1. Explosion API (Ledakan terarah, efek visual ledakan, ledakan di player/kendaraan)
@@ -9,7 +9,7 @@
 --   5. Timer Real-Time (Game.Every / Game.After / setInterval / setTimeout)
 -- ========================================================================
 
-Game.Log("=== AMLua test.lua (v1.0.8) starting ===")
+Game.Log("=== AMLua test.lua (v1.0.9) starting ===")
 
 -- Tampilkan daftar mod yang dimuat di logcat / amlua.log
 local scripts = AMLua.GetLoadedScripts()
@@ -133,4 +133,4 @@ Game.After(8.0, function()
     end
 end)
 
-Game.Log("=== AMLua test.lua (v1.0.8) initialized successfully ===")
+Game.Log("=== AMLua test.lua (v1.0.9) initialized successfully ===")
