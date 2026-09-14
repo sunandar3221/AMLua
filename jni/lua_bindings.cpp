@@ -79,7 +79,7 @@ namespace AMLua
     typedef void  (*VehicleBlowUp_t)(void* vehicle, void* culprit, unsigned char flags);
     typedef void  (*EntityTeleport_t)(void* entity, CVector dest, bool resetRotation);
     typedef void  (*AddExplosion_t)(void* victim, void* creator, int type, const CVector& pos, unsigned int time, bool makeSound, float camShake, bool bInvisible);
-    typedef void  (*TriggerExplosion_t)(const CVector& pos, float effectRadius, float impulseMag, void* explodingEntity, void* culprit, bool bNoSound, float camShake);
+    typedef void  (*TriggerExplosion_t)(const CVector& pos, float radius, float visibleDistance, void* victim, void* creator, bool processVehicleBombTimer, float damage);
     typedef void* (*FindPlayerInfo_t)(int playerNum);
     typedef float (*FindGroundZForCoord_t)(float x, float y);
     typedef float (*FindGroundZFor3DCoord_t)(float x, float y, float z, bool* pBool, void** ppEnt);
@@ -426,12 +426,18 @@ namespace AMLua
         CVector pos = { x, y, z };
         if (pfnTriggerExplosion)
         {
-            bool bNoSound = !makeSound;
-            pfnTriggerExplosion(pos, radius, radius * 0.5f, nullptr, nullptr, bNoSound, camShake);
+            // CWorld::TriggerExplosion(const CVector& pos, float radius, float visibleDistance, CEntity* victim, CEntity* creator, bool processVehicleBombTimer, float damage)
+            // Note: visibleDistance must be sufficiently large (e.g. 350.0f) so the engine renders the fireball and particle FX even at distance!
+            float visibleDistance = 350.0f;
+            if (visibleDistance < radius * 35.0f) visibleDistance = radius * 35.0f;
+            float damage = (radius > 0.0f) ? (radius * 10.0f) : 100.0f;
+            bool processVehicleBombTimer = false;
+            pfnTriggerExplosion(pos, radius, visibleDistance, nullptr, nullptr, processVehicleBombTimer, damage);
             return true;
         }
         else if (pfnAddExplosion)
         {
+            // CExplosion::AddExplosion(CEntity* victim, CEntity* creator, eExplosionType type, const CVector& pos, unsigned int time, bool makeSound, float camShake, bool bInvisible)
             pfnAddExplosion(nullptr, nullptr, type, pos, 0, makeSound, camShake, false);
             return true;
         }
@@ -2150,9 +2156,9 @@ namespace AMLua
 
         // Table: AMLua
         lua_newtable(L);
-        lua_pushstring(L, "1.0.7");
+        lua_pushstring(L, "1.0.8");
         lua_setfield(L, -2, "Version");
-        lua_pushstring(L, "1.0.7");
+        lua_pushstring(L, "1.0.8");
         lua_setfield(L, -2, "VERSION");
         lua_pushcfunction(L, Lua_RegisterTick);
         lua_setfield(L, -2, "OnTick");
@@ -2239,7 +2245,7 @@ namespace AMLua
         }
 
         Log("=========================================");
-        Log("AMLua: Android Mod Lua Script Loader 1.0.7");
+        Log("AMLua: Android Mod Lua Script Loader 1.0.8");
         Log("Target: libGTASA.so (base: %p, size: %zu)", (void*)g_pGTASA, (size_t)g_LibGTASASize);
         Log("Log target: %s", g_LogFilePath.c_str());
         Log("Scripts dir: %s", g_ScriptsDirPath.c_str());

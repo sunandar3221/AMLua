@@ -1,15 +1,15 @@
 -- ========================================================================
--- AMLua Example Test Script: test.lua (v1.0.7)
+-- AMLua Example Test Script: test.lua (v1.0.8)
 -- Target: GTA San Andreas Android (Android Mod Loader)
 -- Menguji fitur:
---   1. Explosion API (Ledakan terarah, ledakan di player/kendaraan)
+--   1. Explosion API (Ledakan terarah, efek visual ledakan, ledakan di player/kendaraan)
 --   2. Vehicle API (Cek kendaraan, kecepatan km/h, boost, perbaikan, kunci pintu)
 --   3. Teleport & Position (Ground Z, teleport player & kendaraan)
 --   4. Game Manipulation (Cuaca, jam/waktu, wanted level, uang, speed game)
 --   5. Timer Real-Time (Game.Every / Game.After / setInterval / setTimeout)
 -- ========================================================================
 
-Game.Log("=== AMLua test.lua (v1.0.7) starting ===")
+Game.Log("=== AMLua test.lua (v1.0.8) starting ===")
 
 -- Tampilkan daftar mod yang dimuat di logcat / amlua.log
 local scripts = AMLua.GetLoadedScripts()
@@ -66,7 +66,7 @@ Game.After(3.0, function()
     local money = Player.GetMoney()
     Game.Log(string.format("Player Money: $%d", money))
 
-    Game.PrintText("~y~AMLua v1.0.7 Siap!~n~~w~Cuaca: Cerah | Jam: 12:00~n~~g~+$2,500 Bonus Masuk!", 4000)
+    Game.PrintText("~y~AMLua v1.0.8 Siap!~n~~w~Cuaca: Cerah | Jam: 12:00~n~~g~+$2,500 Bonus Masuk!", 4000)
 end)
 
 -- ========================================================================
@@ -112,12 +112,13 @@ function CreateFrontExplosion(distance)
 
     local expX = x - math.sin(rad) * dist
     local expY = y + math.cos(rad) * dist
-    local expZ = Game.GetGroundZ(expX, expY)
+    local groundZ = Game.GetGroundZ(expX, expY)
+    local expZ = (groundZ and groundZ > -900.0) and (groundZ + 0.8) or (z + 0.8)
 
     -- Buat ledakan tipe 3 (CAR explosion) dengan radius 10, ada suara & getaran kamera
     local ok = Explosion.Create(expX, expY, expZ, 3, 10.0, true, 1.0)
     if ok then
-        Game.PrintText("~r~KABOOM!~n~~w~Ledakan berhasil dibuat!", 2500)
+        Game.PrintText("~r~KABOOM!~n~~w~Ledakan visual berhasil dibuat!", 2500)
         Game.Log(string.format("Explosion spawned successfully at (%.2f, %.2f, %.2f)", expX, expY, expZ))
     else
         Game.Log("Explosion.Create returned false")
@@ -132,4 +133,4 @@ Game.After(8.0, function()
     end
 end)
 
-Game.Log("=== AMLua test.lua (v1.0.7) initialized successfully ===")
+Game.Log("=== AMLua test.lua (v1.0.8) initialized successfully ===")

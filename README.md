@@ -5,7 +5,7 @@
 [![Platform](https://img.shields.io/badge/Platform-Android-green.svg)](https://android.com)
 [![Architecture](https://img.shields.io/badge/Arch-arm64--v8a%20%7C%20armeabi--v7a-orange.svg)](#)
 [![Lua Version](https://img.shields.io/badge/Lua-5.4.6-blue.svg)](https://www.lua.org)
-[![Version](https://img.shields.io/badge/Version-1.0.7-brightgreen.svg)](#)
+[![Version](https://img.shields.io/badge/Version-1.0.8-brightgreen.svg)](#)
 
 **AMLua (Android Mod Lua)** adalah plugin shared library resmi berbasis **Android Mod Loader (AML)** yang dirancang untuk memuat, mengelola, dan mengeksekusi script **Lua** secara dinamis langsung di dalam game **Grand Theft Auto: San Andreas** (Android).
 
@@ -92,8 +92,10 @@ Pada ekosistem modding GTA San Andreas Android, terdapat dua metode tradisional 
 - **Dedicated Distinct Naming**: Nama file 64-bit (`libAMLua64.so`) dan 32-bit (`libAMLua32.so`) berbeda, mencegah salah pasang atau tertimpa tanpa sengaja.
 - **Direct `.so` Download**: File `.so` dapat diunduh langsung satu per satu di GitHub Release tanpa perlu mengekstrak file ZIP di smartphone.
 - **Full Crash & Error Logging**: Setiap ada error atau game crash, penyebabnya langsung disimpan di file log diagnostik (`amlua_crash.log` dan `amlua_error.log`).
-- **Rich Modding API (v1.0.7)**: Mendukung modul `Explosion`, manipulasi kendaraan lengkap (`Vehicle`), teleportasi aman (`Player.Teleport`, `Game.Teleport`), deteksi ketinggian tanah (`Game.GetGroundZ`), waktu, cuaca, wanted level, uang, dan speed game.
-- **Bulletproof Anti-Crash Protection (v1.0.7)**: Dilengkapi proteksi lapis baja terhadap bug engine GTA SA mobile:
+- **Rich Modding API (v1.0.8)**: Mendukung modul `Explosion` dengan render visual bola api penuh, manipulasi kendaraan lengkap (`Vehicle`), teleportasi aman (`Player.Teleport`, `Game.Teleport`), deteksi ketinggian tanah (`Game.GetGroundZ`), waktu, cuaca, wanted level, uang, dan speed game.
+- **Bulletproof Anti-Crash Protection & Visual FX Fix (v1.0.8)**: Dilengkapi proteksi lapis baja terhadap bug engine GTA SA mobile:
+  - **Perbaikan Visual Ledakan**: Memperbaiki nilai parameter engine `visibleDistance` menjadi `350.0m` (sebelumnya terpotong di 5m), sehingga efek visual partikel bola api, kilatan cahaya, dan kepulan asap ledakan terlihat jelas di layar tanpa ter-cull/hilang oleh engine saat dipanggil dari jarak jauh.
+  - Penyesuaian kalkulasi damage ledakan native (100 HP) dan flag `processVehicleBombTimer`.
   - Mengatasi fatal crash `FindPlayerVehicle(-1)` dengan helper aman `GetLocalPlayerVehicle()`.
   - Mengatasi crash `Explosion.Create` dengan pemanggilan presisi symbol native `CWorld::TriggerExplosion`.
   - Mengatasi crash `Teleport` dengan bypass ABI crash melalui direct placement & matrix update dan velocity reset.
