@@ -5,7 +5,7 @@
 [![Platform](https://img.shields.io/badge/Platform-Android-green.svg)](https://android.com)
 [![Architecture](https://img.shields.io/badge/Arch-arm64--v8a%20%7C%20armeabi--v7a-orange.svg)](#)
 [![Lua Version](https://img.shields.io/badge/Lua-5.4.6-blue.svg)](https://www.lua.org)
-[![Version](https://img.shields.io/badge/Version-1.0.6-brightgreen.svg)](#)
+[![Version](https://img.shields.io/badge/Version-1.0.7-brightgreen.svg)](#)
 
 **AMLua (Android Mod Lua)** adalah plugin shared library resmi berbasis **Android Mod Loader (AML)** yang dirancang untuk memuat, mengelola, dan mengeksekusi script **Lua** secara dinamis langsung di dalam game **Grand Theft Auto: San Andreas** (Android).
 
@@ -92,7 +92,13 @@ Pada ekosistem modding GTA San Andreas Android, terdapat dua metode tradisional 
 - **Dedicated Distinct Naming**: Nama file 64-bit (`libAMLua64.so`) dan 32-bit (`libAMLua32.so`) berbeda, mencegah salah pasang atau tertimpa tanpa sengaja.
 - **Direct `.so` Download**: File `.so` dapat diunduh langsung satu per satu di GitHub Release tanpa perlu mengekstrak file ZIP di smartphone.
 - **Full Crash & Error Logging**: Setiap ada error atau game crash, penyebabnya langsung disimpan di file log diagnostik (`amlua_crash.log` dan `amlua_error.log`).
-- **Rich Modding API (v1.0.6)**: Mendukung modul `Explosion`, manipulasi kendaraan lengkap (`Vehicle`), teleportasi aman (`Player.Teleport`, `Game.Teleport`), deteksi ketinggian tanah (`Game.GetGroundZ`), waktu, cuaca, wanted level, uang, dan speed game.
+- **Rich Modding API (v1.0.7)**: Mendukung modul `Explosion`, manipulasi kendaraan lengkap (`Vehicle`), teleportasi aman (`Player.Teleport`, `Game.Teleport`), deteksi ketinggian tanah (`Game.GetGroundZ`), waktu, cuaca, wanted level, uang, dan speed game.
+- **Bulletproof Anti-Crash Protection (v1.0.7)**: Dilengkapi proteksi lapis baja terhadap bug engine GTA SA mobile:
+  - Mengatasi fatal crash `FindPlayerVehicle(-1)` dengan helper aman `GetLocalPlayerVehicle()`.
+  - Mengatasi crash `Explosion.Create` dengan pemanggilan presisi symbol native `CWorld::TriggerExplosion`.
+  - Mengatasi crash `Teleport` dengan bypass ABI crash melalui direct placement & matrix update dan velocity reset.
+  - Mengatasi crash `CWanted` dan manipulasi uang dengan validasi aktif pemain sebelum mengakses memori `libGTASA.so`.
+  - Validasi memori kernel via syscall `mincore(2)` untuk mendeteksi unmapped page tanpa segfault.
 - **Native Top-Right Dialog**: Menggunakan dialog box bawaan GTA San Andreas (`CHud::SetHelpMessage`) yang estetik di pojok kanan atas dengan teks khas GTA dan dukungan kode warna penuh (`~g~`, `~y~`, `~w~`, `~n~`).
 - **Gesture Mod List Viewer**: Buka daftar mod aktif di layar cukup dengan double-tap di bagian atas layar atau tap dengan 2 jari.
 - **Zero-Crash Memory Safety**: Dilengkapi validasi memori kernel Linux (`IsValidMemory`) dan verifikasi pointer entitas game (`IsValidGameObject`) agar aman dari crash New Game, cutscene, dan transisi interior.

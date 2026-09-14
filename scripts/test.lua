@@ -1,5 +1,5 @@
 -- ========================================================================
--- AMLua Example Test Script: test.lua (v1.0.6)
+-- AMLua Example Test Script: test.lua (v1.0.7)
 -- Target: GTA San Andreas Android (Android Mod Loader)
 -- Menguji fitur:
 --   1. Explosion API (Ledakan terarah, ledakan di player/kendaraan)
@@ -9,7 +9,7 @@
 --   5. Timer Real-Time (Game.Every / Game.After / setInterval / setTimeout)
 -- ========================================================================
 
-Game.Log("=== AMLua test.lua (v1.0.6) starting ===")
+Game.Log("=== AMLua test.lua (v1.0.7) starting ===")
 
 -- Tampilkan daftar mod yang dimuat di logcat / amlua.log
 local scripts = AMLua.GetLoadedScripts()
@@ -66,7 +66,7 @@ Game.After(3.0, function()
     local money = Player.GetMoney()
     Game.Log(string.format("Player Money: $%d", money))
 
-    Game.PrintText("~y~AMLua v1.0.6 Siap!~n~~w~Cuaca: Cerah | Jam: 12:00~n~~g~+$2,500 Bonus Masuk!", 4000)
+    Game.PrintText("~y~AMLua v1.0.7 Siap!~n~~w~Cuaca: Cerah | Jam: 12:00~n~~g~+$2,500 Bonus Masuk!", 4000)
 end)
 
 -- ========================================================================
@@ -115,9 +115,21 @@ function CreateFrontExplosion(distance)
     local expZ = Game.GetGroundZ(expX, expY)
 
     -- Buat ledakan tipe 3 (CAR explosion) dengan radius 10, ada suara & getaran kamera
-    Explosion.Create(expX, expY, expZ, 3, 10.0, true, 1.0)
-    Game.PrintText("~r~KABOOM!~n~~w~Ledakan berhasil dibuat!", 2500)
-    Game.Log(string.format("Explosion spawned at (%.2f, %.2f, %.2f)", expX, expY, expZ))
+    local ok = Explosion.Create(expX, expY, expZ, 3, 10.0, true, 1.0)
+    if ok then
+        Game.PrintText("~r~KABOOM!~n~~w~Ledakan berhasil dibuat!", 2500)
+        Game.Log(string.format("Explosion spawned successfully at (%.2f, %.2f, %.2f)", expX, expY, expZ))
+    else
+        Game.Log("Explosion.Create returned false")
+    end
 end
 
-Game.Log("=== AMLua test.lua (v1.0.6) initialized successfully ===")
+-- Demonstrasi otomatis ledakan aman di depan pemain setelah 8 detik
+Game.After(8.0, function()
+    local ped = Player.GetPed()
+    if ped ~= nil then
+        CreateFrontExplosion(18.0)
+    end
+end)
+
+Game.Log("=== AMLua test.lua (v1.0.7) initialized successfully ===")

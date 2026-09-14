@@ -9,6 +9,7 @@
 #include <string.h>
 #include <time.h>
 #include <sys/stat.h>
+#include <sys/mman.h>
 #include <dirent.h>
 #include <unistd.h>
 #include <errno.h>
@@ -78,7 +79,8 @@ namespace AMLua
     typedef void  (*VehicleBlowUp_t)(void* vehicle, void* culprit, unsigned char flags);
     typedef void  (*EntityTeleport_t)(void* entity, CVector dest, bool resetRotation);
     typedef void  (*AddExplosion_t)(void* victim, void* creator, int type, const CVector& pos, unsigned int time, bool makeSound, float camShake, bool bInvisible);
-    typedef void  (*TriggerExplosion_t)(const CVector& pos, float effectRadius, float impulseMag, void* explodingEntity, void* explosionOwner, bool blowUpQuick, float damagePercentage);
+    typedef void  (*TriggerExplosion_t)(const CVector& pos, float effectRadius, float impulseMag, void* explodingEntity, void* culprit, bool bNoSound, float camShake);
+    typedef void* (*FindPlayerInfo_t)(int playerNum);
     typedef float (*FindGroundZForCoord_t)(float x, float y);
     typedef float (*FindGroundZFor3DCoord_t)(float x, float y, float z, bool* pBool, void** ppEnt);
     typedef void  (*SetGameClock_t)(unsigned char hour, unsigned char min, unsigned char day);
@@ -92,6 +94,7 @@ namespace AMLua
     static FindPlayerPed_t         pfnFindPlayerPed = nullptr;
     static FindPlayerVehicle_t     pfnFindPlayerVehicle = nullptr;
     static FindPlayerWanted_t      pfnFindPlayerWanted = nullptr;
+    static FindPlayerInfo_t        pfnFindPlayerInfo = nullptr;
     static AsciiToGxtChar_t        pfnAsciiToGxtChar = nullptr;
     static SetHelpMessage6_t       pfnSetHelpMessage6 = nullptr;
     static SetHelpMessage5_t       pfnSetHelpMessage5 = nullptr;
@@ -209,21 +212,29 @@ namespace AMLua
     // Verify memory readability via kernel syscall check to avoid SIGSEGV
     inline bool IsValidMemory(const void* ptr, size_t size)
     {
-        if (!ptr) return false;
+        if (!ptr || size == 0) return false;
         uintptr_t addr = (uintptr_t)ptr;
 
         #ifdef AML32
         if (addr < 0x10000 || addr >= 0xFFFFF000) return false;
+        if (addr + size < addr) return false;
         #else
         if (addr < 0x10000 || addr >= 0x00007FFFFFFFFFFFULL) return false;
+        if (addr + size < addr) return false;
         #endif
 
-        if ((addr % sizeof(void*)) != 0 && size >= sizeof(void*)) return false;
+        if ((addr & 3) != 0) return false;
 
-        // write(-1, ptr, size) asks the kernel to validate the user buffer without segfaulting
-        if (write(-1, ptr, size) < 0 && errno == EFAULT)
+        uintptr_t pageStart = addr & ~(4096 - 1);
+        uintptr_t pageEnd = (addr + size - 1) & ~(4096 - 1);
+        size_t numPages = ((pageEnd - pageStart) / 4096) + 1;
+        if (numPages <= 8)
         {
-            return false;
+            unsigned char vec[8];
+            if (mincore((void*)pageStart, numPages * 4096, vec) != 0)
+            {
+                if (errno == ENOMEM) return false;
+            }
         }
         return true;
     }
@@ -232,11 +243,19 @@ namespace AMLua
     inline bool IsValidGameObject(void* ptr)
     {
         if (!IsValidMemory(ptr, sizeof(void*))) return false;
+        if (((uintptr_t)ptr % sizeof(void*)) != 0) return false;
 
         // Verify vtable pointer is readable and valid
         uintptr_t vtable = *(uintptr_t*)ptr;
         if (!IsValidMemory((void*)vtable, sizeof(void*))) return false;
 
+        if (g_pGTASA && g_LibGTASASize)
+        {
+            if (vtable >= g_pGTASA && vtable < (g_pGTASA + g_LibGTASASize))
+            {
+                return true;
+            }
+        }
         return true;
     }
 
@@ -255,6 +274,72 @@ namespace AMLua
         {
             return (void*)(uintptr_t)lua_tonumber(L, idx);
         }
+        return nullptr;
+    }
+
+    // Safe retrieval of local player vehicle pointer without out-of-bounds crash
+    static void* GetLocalPlayerVehicle()
+    {
+        if (!pfnFindPlayerPed) return nullptr;
+        void* ped = pfnFindPlayerPed(-1);
+        if (!IsValidGameObject(ped)) return nullptr;
+
+        #ifdef AML32
+        constexpr uintptr_t OFF_PED_VEH = 0x590;
+        #else
+        constexpr uintptr_t OFF_PED_VEH = 0x708;
+        #endif
+
+        void** ppVeh = (void**)((uintptr_t)ped + OFF_PED_VEH);
+        if (IsValidMemory(ppVeh, sizeof(void*)) && IsValidGameObject(*ppVeh))
+        {
+            return *ppVeh;
+        }
+
+        if (pfnFindPlayerVehicle)
+        {
+            void* veh = pfnFindPlayerVehicle(0, false);
+            if (IsValidGameObject(veh)) return veh;
+        }
+        return nullptr;
+    }
+
+    // Safe retrieval of CPlayerInfo pointer matching current spawned player
+    static void* GetPlayerInfo()
+    {
+        if (!pfnFindPlayerPed) return nullptr;
+        void* ped = pfnFindPlayerPed(-1);
+        if (!IsValidGameObject(ped)) return nullptr;
+
+        void* playerInfo = nullptr;
+        if (pfnFindPlayerInfo)
+        {
+            playerInfo = pfnFindPlayerInfo(0);
+        }
+        if (!playerInfo && pWorldPlayers)
+        {
+            playerInfo = pWorldPlayers;
+        }
+
+        if (!playerInfo || !IsValidMemory(playerInfo, 0x100)) return nullptr;
+
+        // Check direct struct match: playerInfo->m_pPed == ped
+        void* pedInInfo = *(void**)playerInfo;
+        if (pedInInfo == ped)
+        {
+            return playerInfo;
+        }
+
+        // Check if playerInfo is a pointer-to-pointer (GOT entry)
+        if (IsValidMemory(pedInInfo, 0x100))
+        {
+            void* derefInfo = *(void**)pedInInfo;
+            if (derefInfo == ped)
+            {
+                return (void*)pedInInfo;
+            }
+        }
+
         return nullptr;
     }
 
@@ -332,13 +417,6 @@ namespace AMLua
             pTurn[2] = 0.0f;
         }
 
-        // Engine teleport if symbol is present
-        if (pfnEntityTeleport)
-        {
-            CVector dest = { x, y, z };
-            pfnEntityTeleport(entity, dest, false);
-        }
-
         return true;
     }
 
@@ -346,14 +424,15 @@ namespace AMLua
     static bool CreateExplosionInternal(float x, float y, float z, int type, float radius, bool makeSound, float camShake)
     {
         CVector pos = { x, y, z };
-        if (pfnAddExplosion)
+        if (pfnTriggerExplosion)
         {
-            pfnAddExplosion(nullptr, nullptr, type, pos, 0, makeSound, camShake, false);
+            bool bNoSound = !makeSound;
+            pfnTriggerExplosion(pos, radius, radius * 0.5f, nullptr, nullptr, bNoSound, camShake);
             return true;
         }
-        else if (pfnTriggerExplosion)
+        else if (pfnAddExplosion)
         {
-            pfnTriggerExplosion(pos, radius, radius * 0.5f, nullptr, nullptr, false, 100.0f);
+            pfnAddExplosion(nullptr, nullptr, type, pos, 0, makeSound, camShake, false);
             return true;
         }
         Log("[Explosion] No explosion function available");
@@ -543,15 +622,12 @@ namespace AMLua
         }
 
         // If player is in a vehicle and local player is teleporting, move the vehicle
-        if (pfnFindPlayerVehicle)
+        void* veh = GetLocalPlayerVehicle();
+        if (veh)
         {
-            void* veh = pfnFindPlayerVehicle(-1, false);
-            if (IsValidGameObject(veh))
-            {
-                SetEntityPosition(veh, x, y, z);
-                lua_pushboolean(L, 1);
-                return 1;
-            }
+            SetEntityPosition(veh, x, y, z);
+            lua_pushboolean(L, 1);
+            return 1;
         }
 
         bool ok = SetEntityPosition(ped, x, y, z);
@@ -562,13 +638,8 @@ namespace AMLua
     // Player.GetVehicle([ped]) -> lightuserdata or nil
     static int Lua_Player_GetVehicle(lua_State* L)
     {
-        void* veh = nullptr;
-        if (pfnFindPlayerVehicle)
-        {
-            veh = pfnFindPlayerVehicle(-1, false);
-        }
-
-        if (IsValidGameObject(veh))
+        void* veh = GetLocalPlayerVehicle();
+        if (veh)
         {
             lua_pushlightuserdata(L, veh);
         }
@@ -582,13 +653,8 @@ namespace AMLua
     // Player.IsInVehicle([ped]) -> boolean
     static int Lua_Player_IsInVehicle(lua_State* L)
     {
-        void* veh = nullptr;
-        if (pfnFindPlayerVehicle)
-        {
-            veh = pfnFindPlayerVehicle(-1, false);
-        }
-        bool inVeh = IsValidGameObject(veh);
-        lua_pushboolean(L, inVeh ? 1 : 0);
+        void* veh = GetLocalPlayerVehicle();
+        lua_pushboolean(L, veh != nullptr ? 1 : 0);
         return 1;
     }
 
@@ -644,9 +710,16 @@ namespace AMLua
     // Player.GetWantedLevel() -> integer
     static int Lua_Player_GetWantedLevel(lua_State* L)
     {
+        void* ped = pfnFindPlayerPed ? pfnFindPlayerPed(-1) : nullptr;
+        if (!IsValidGameObject(ped))
+        {
+            lua_pushinteger(L, s_CachedWantedLevel);
+            return 1;
+        }
+
         void* wanted = nullptr;
         if (pfnFindPlayerWanted) wanted = pfnFindPlayerWanted(0);
-        if (IsValidMemory(wanted, sizeof(void*)))
+        if (wanted && IsValidMemory(wanted, sizeof(void*)))
         {
             if (pfnGetWantedLevel)
             {
@@ -674,9 +747,12 @@ namespace AMLua
         if (level > 6) level = 6;
         s_CachedWantedLevel = level;
 
+        void* ped = pfnFindPlayerPed ? pfnFindPlayerPed(-1) : nullptr;
+        if (!IsValidGameObject(ped)) return 0;
+
         void* wanted = nullptr;
         if (pfnFindPlayerWanted) wanted = pfnFindPlayerWanted(0);
-        if (IsValidMemory(wanted, sizeof(void*)))
+        if (wanted && IsValidMemory(wanted, sizeof(void*)))
         {
             if (pfnSetWantedLevel)
             {
@@ -700,9 +776,13 @@ namespace AMLua
     static int Lua_Player_ClearWantedLevel(lua_State* L)
     {
         s_CachedWantedLevel = 0;
+
+        void* ped = pfnFindPlayerPed ? pfnFindPlayerPed(-1) : nullptr;
+        if (!IsValidGameObject(ped)) return 0;
+
         void* wanted = nullptr;
         if (pfnFindPlayerWanted) wanted = pfnFindPlayerWanted(0);
-        if (IsValidMemory(wanted, sizeof(void*)))
+        if (wanted && IsValidMemory(wanted, sizeof(void*)))
         {
             if (pfnSetWantedLevel) pfnSetWantedLevel(wanted, 0);
             else if (pfnSetWantedLevelNoDrop) pfnSetWantedLevelNoDrop(wanted, 0);
@@ -720,18 +800,20 @@ namespace AMLua
     static int Lua_Player_GiveMoney(lua_State* L)
     {
         int amount = (int)luaL_checkinteger(L, 1);
-        if (!pWorldPlayers) return 0;
-
-        int* pMoney = (int*)((uintptr_t)pWorldPlayers + OFF_MONEY);
-        int* pDispMoney = (int*)((uintptr_t)pWorldPlayers + OFF_DISP_MONEY);
-
-        if (IsValidMemory(pMoney, sizeof(int)))
+        void* pInfo = GetPlayerInfo();
+        if (pInfo)
         {
-            *pMoney += amount;
-        }
-        if (IsValidMemory(pDispMoney, sizeof(int)))
-        {
-            *pDispMoney += amount;
+            int* pMoney = (int*)((uintptr_t)pInfo + OFF_MONEY);
+            int* pDispMoney = (int*)((uintptr_t)pInfo + OFF_DISP_MONEY);
+
+            if (IsValidMemory(pMoney, sizeof(int)))
+            {
+                *pMoney += amount;
+            }
+            if (IsValidMemory(pDispMoney, sizeof(int)))
+            {
+                *pDispMoney += amount;
+            }
         }
         return 0;
     }
@@ -740,18 +822,20 @@ namespace AMLua
     static int Lua_Player_SetMoney(lua_State* L)
     {
         int amount = (int)luaL_checkinteger(L, 1);
-        if (!pWorldPlayers) return 0;
-
-        int* pMoney = (int*)((uintptr_t)pWorldPlayers + OFF_MONEY);
-        int* pDispMoney = (int*)((uintptr_t)pWorldPlayers + OFF_DISP_MONEY);
-
-        if (IsValidMemory(pMoney, sizeof(int)))
+        void* pInfo = GetPlayerInfo();
+        if (pInfo)
         {
-            *pMoney = amount;
-        }
-        if (IsValidMemory(pDispMoney, sizeof(int)))
-        {
-            *pDispMoney = amount;
+            int* pMoney = (int*)((uintptr_t)pInfo + OFF_MONEY);
+            int* pDispMoney = (int*)((uintptr_t)pInfo + OFF_DISP_MONEY);
+
+            if (IsValidMemory(pMoney, sizeof(int)))
+            {
+                *pMoney = amount;
+            }
+            if (IsValidMemory(pDispMoney, sizeof(int)))
+            {
+                *pDispMoney = amount;
+            }
         }
         return 0;
     }
@@ -759,9 +843,10 @@ namespace AMLua
     // Player.GetMoney() -> integer
     static int Lua_Player_GetMoney(lua_State* L)
     {
-        if (pWorldPlayers)
+        void* pInfo = GetPlayerInfo();
+        if (pInfo)
         {
-            int* pMoney = (int*)((uintptr_t)pWorldPlayers + OFF_MONEY);
+            int* pMoney = (int*)((uintptr_t)pInfo + OFF_MONEY);
             if (IsValidMemory(pMoney, sizeof(int)))
             {
                 lua_pushinteger(L, *pMoney);
@@ -787,9 +872,9 @@ namespace AMLua
     {
         void* veh = nullptr;
         if (lua_gettop(L) >= 1) veh = GetPointerFromArg(L, 1);
-        if (!IsValidGameObject(veh) && pfnFindPlayerVehicle)
+        if (!IsValidGameObject(veh))
         {
-            veh = pfnFindPlayerVehicle(-1, false);
+            veh = GetLocalPlayerVehicle();
         }
 
         float x = 0.0f, y = 0.0f, z = 0.0f;
@@ -823,7 +908,7 @@ namespace AMLua
         }
         else if (top >= 3)
         {
-            if (pfnFindPlayerVehicle) veh = pfnFindPlayerVehicle(-1, false);
+            veh = GetLocalPlayerVehicle();
             x = (float)luaL_checknumber(L, 1);
             y = (float)luaL_checknumber(L, 2);
             z = (float)luaL_checknumber(L, 3);
@@ -842,9 +927,9 @@ namespace AMLua
     static int Lua_Vehicle_GetVelocity(lua_State* L)
     {
         void* veh = GetPointerFromArg(L, 1);
-        if (!IsValidGameObject(veh) && pfnFindPlayerVehicle)
+        if (!IsValidGameObject(veh))
         {
-            veh = pfnFindPlayerVehicle(-1, false);
+            veh = GetLocalPlayerVehicle();
         }
         if (!IsValidGameObject(veh))
         {
@@ -886,7 +971,7 @@ namespace AMLua
         }
         else
         {
-            if (pfnFindPlayerVehicle) veh = pfnFindPlayerVehicle(-1, false);
+            veh = GetLocalPlayerVehicle();
             vx = (float)luaL_checknumber(L, 1);
             vy = (float)luaL_checknumber(L, 2);
             vz = (float)luaL_checknumber(L, 3);
@@ -908,9 +993,9 @@ namespace AMLua
     static int Lua_Vehicle_GetSpeed(lua_State* L)
     {
         void* veh = GetPointerFromArg(L, 1);
-        if (!IsValidGameObject(veh) && pfnFindPlayerVehicle)
+        if (!IsValidGameObject(veh))
         {
-            veh = pfnFindPlayerVehicle(-1, false);
+            veh = GetLocalPlayerVehicle();
         }
         if (!IsValidGameObject(veh))
         {
@@ -946,7 +1031,7 @@ namespace AMLua
         }
         else
         {
-            if (pfnFindPlayerVehicle) veh = pfnFindPlayerVehicle(-1, false);
+            veh = GetLocalPlayerVehicle();
             kmh = (float)luaL_checknumber(L, 1);
         }
 
@@ -980,9 +1065,9 @@ namespace AMLua
     static int Lua_Vehicle_Repair(lua_State* L)
     {
         void* veh = GetPointerFromArg(L, 1);
-        if (!IsValidGameObject(veh) && pfnFindPlayerVehicle)
+        if (!IsValidGameObject(veh))
         {
-            veh = pfnFindPlayerVehicle(-1, false);
+            veh = GetLocalPlayerVehicle();
         }
         if (!IsValidGameObject(veh)) return 0;
 
@@ -1003,9 +1088,9 @@ namespace AMLua
     static int Lua_Vehicle_GetHealth(lua_State* L)
     {
         void* veh = GetPointerFromArg(L, 1);
-        if (!IsValidGameObject(veh) && pfnFindPlayerVehicle)
+        if (!IsValidGameObject(veh))
         {
-            veh = pfnFindPlayerVehicle(-1, false);
+            veh = GetLocalPlayerVehicle();
         }
         if (!IsValidGameObject(veh))
         {
@@ -1039,7 +1124,7 @@ namespace AMLua
         }
         else
         {
-            if (pfnFindPlayerVehicle) veh = pfnFindPlayerVehicle(-1, false);
+            veh = GetLocalPlayerVehicle();
             hp = (float)luaL_checknumber(L, 1);
         }
 
@@ -1059,9 +1144,9 @@ namespace AMLua
     static int Lua_Vehicle_BlowUp(lua_State* L)
     {
         void* veh = GetPointerFromArg(L, 1);
-        if (!IsValidGameObject(veh) && pfnFindPlayerVehicle)
+        if (!IsValidGameObject(veh))
         {
-            veh = pfnFindPlayerVehicle(-1, false);
+            veh = GetLocalPlayerVehicle();
         }
         if (!IsValidGameObject(veh)) return 0;
 
@@ -1098,7 +1183,7 @@ namespace AMLua
         }
         else
         {
-            if (pfnFindPlayerVehicle) veh = pfnFindPlayerVehicle(-1, false);
+            veh = GetLocalPlayerVehicle();
             lockType = (int)luaL_checkinteger(L, 1);
         }
 
@@ -1126,7 +1211,7 @@ namespace AMLua
         }
         else
         {
-            if (pfnFindPlayerVehicle) veh = pfnFindPlayerVehicle(-1, false);
+            veh = GetLocalPlayerVehicle();
             locked = lua_toboolean(L, 1) != 0;
         }
 
@@ -1144,9 +1229,9 @@ namespace AMLua
     static int Lua_Vehicle_IsLocked(lua_State* L)
     {
         void* veh = GetPointerFromArg(L, 1);
-        if (!IsValidGameObject(veh) && pfnFindPlayerVehicle)
+        if (!IsValidGameObject(veh))
         {
-            veh = pfnFindPlayerVehicle(-1, false);
+            veh = GetLocalPlayerVehicle();
         }
         if (!IsValidGameObject(veh))
         {
@@ -1169,7 +1254,7 @@ namespace AMLua
     {
         void* veh = nullptr;
         if (lua_gettop(L) >= 1) veh = GetPointerFromArg(L, 1);
-        if (!IsValidGameObject(veh) && pfnFindPlayerVehicle) veh = pfnFindPlayerVehicle(-1, false);
+        if (!IsValidGameObject(veh)) veh = GetLocalPlayerVehicle();
         if (!IsValidGameObject(veh))
         {
             lua_pushnumber(L, 0.0);
@@ -1198,7 +1283,7 @@ namespace AMLua
         }
         else
         {
-            if (pfnFindPlayerVehicle) veh = pfnFindPlayerVehicle(-1, false);
+            veh = GetLocalPlayerVehicle();
             deg = (float)luaL_checknumber(L, 1);
         }
 
@@ -1271,9 +1356,9 @@ namespace AMLua
             veh = GetPointerFromArg(L, 1);
             argStart = 2;
         }
-        else if (pfnFindPlayerVehicle)
+        else
         {
-            veh = pfnFindPlayerVehicle(-1, false);
+            veh = GetLocalPlayerVehicle();
         }
 
         if (!IsValidGameObject(veh))
@@ -2065,8 +2150,10 @@ namespace AMLua
 
         // Table: AMLua
         lua_newtable(L);
-        lua_pushstring(L, "1.0.6");
+        lua_pushstring(L, "1.0.7");
         lua_setfield(L, -2, "Version");
+        lua_pushstring(L, "1.0.7");
+        lua_setfield(L, -2, "VERSION");
         lua_pushcfunction(L, Lua_RegisterTick);
         lua_setfield(L, -2, "OnTick");
 
@@ -2152,7 +2239,7 @@ namespace AMLua
         }
 
         Log("=========================================");
-        Log("AMLua: Android Mod Lua Script Loader 1.0.6");
+        Log("AMLua: Android Mod Lua Script Loader 1.0.7");
         Log("Target: libGTASA.so (base: %p, size: %zu)", (void*)g_pGTASA, (size_t)g_LibGTASASize);
         Log("Log target: %s", g_LogFilePath.c_str());
         Log("Scripts dir: %s", g_ScriptsDirPath.c_str());
@@ -2175,6 +2262,11 @@ namespace AMLua
             pfnFindPlayerWanted = (FindPlayerWanted_t)aml->GetSym(g_pGTASA, "_Z16FindPlayerWantedi");
             if (!pfnFindPlayerWanted) pfnFindPlayerWanted = (FindPlayerWanted_t)aml->GetSym(g_pGTASA, "FindPlayerWanted");
             Log("Symbol FindPlayerWanted: %p", (void*)pfnFindPlayerWanted);
+
+            // 3b. FindPlayerInfo
+            pfnFindPlayerInfo = (FindPlayerInfo_t)aml->GetSym(g_pGTASA, "_Z14FindPlayerInfoi");
+            if (!pfnFindPlayerInfo) pfnFindPlayerInfo = (FindPlayerInfo_t)aml->GetSym(g_pGTASA, "FindPlayerInfo");
+            Log("Symbol FindPlayerInfo: %p", (void*)pfnFindPlayerInfo);
 
             // 4. SetWantedLevel
             pfnSetWantedLevel = (SetWantedLevel_t)aml->GetSym(g_pGTASA, "_ZN7CWanted14SetWantedLevelEi");
@@ -2224,9 +2316,6 @@ namespace AMLua
             if (!pfnAddExplosion) pfnAddExplosion = (AddExplosion_t)aml->GetSym(g_pGTASA, "_ZN10CExplosion12AddExplosionEP7CEntityS1_14eExplosionTypeRK7CVectorjbf");
             if (!pfnAddExplosion) pfnAddExplosion = (AddExplosion_t)aml->GetSym(g_pGTASA, "_ZN10CExplosion12AddExplosionEP7CEntityS1_iRK7CVectorjbfb");
             if (!pfnAddExplosion) pfnAddExplosion = (AddExplosion_t)aml->GetSym(g_pGTASA, "_ZN10CExplosion12AddExplosionEP7CEntityS1_iRK7CVectorjbf");
-            #ifdef AML32
-            if (!pfnAddExplosion && g_pGTASA) pfnAddExplosion = (AddExplosion_t)(g_pGTASA + 0x5A70D0);
-            #endif
             Log("Symbol CExplosion::AddExplosion: %p", (void*)pfnAddExplosion);
 
             pfnTriggerExplosion = (TriggerExplosion_t)aml->GetSym(g_pGTASA, "_ZN6CWorld16TriggerExplosionERK7CVectorffP7CEntityS4_bf");
