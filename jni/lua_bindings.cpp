@@ -12,6 +12,7 @@
 #include <dirent.h>
 #include <unistd.h>
 #include <errno.h>
+#include <cmath>
 #include <vector>
 #include <string>
 #include <algorithm>
@@ -30,19 +31,42 @@ namespace AMLua
 
     // Exact struct member offsets verified from GTA SA Android headers (aml-psdk)
     #ifdef AML32
-        constexpr uintptr_t OFF_PED_HEALTH = 0x544;
+        constexpr uintptr_t OFF_PED_HEALTH     = 0x544;
         constexpr uintptr_t OFF_PED_MAX_HEALTH = 0x548;
-        constexpr uintptr_t OFF_PED_ARMOUR = 0x54C;
-        constexpr uintptr_t OFF_VEH_HEALTH = 0x4CC;
+        constexpr uintptr_t OFF_PED_ARMOUR     = 0x54C;
+        constexpr uintptr_t OFF_VEH_HEALTH     = 0x4CC;
+        constexpr uintptr_t OFF_PLACEMENT      = 0x4;
+        constexpr uintptr_t OFF_HEADING        = 0x10;
+        constexpr uintptr_t OFF_MATRIX         = 0x14;
+        constexpr uintptr_t OFF_MOVE_SPEED     = 0x54;
+        constexpr uintptr_t OFF_TURN_SPEED     = 0x60;
+        constexpr uintptr_t OFF_DOOR_LOCK      = 0x508;
+        constexpr uintptr_t OFF_MONEY          = 0xB8;
+        constexpr uintptr_t OFF_DISP_MONEY     = 0xBC;
     #else
-        constexpr uintptr_t OFF_PED_HEALTH = 0x6AC;
+        constexpr uintptr_t OFF_PED_HEALTH     = 0x6AC;
         constexpr uintptr_t OFF_PED_MAX_HEALTH = 0x6B0;
-        constexpr uintptr_t OFF_PED_ARMOUR = 0x6B4;
-        constexpr uintptr_t OFF_VEH_HEALTH = 0x634;
+        constexpr uintptr_t OFF_PED_ARMOUR     = 0x6B4;
+        constexpr uintptr_t OFF_VEH_HEALTH     = 0x634;
+        constexpr uintptr_t OFF_PLACEMENT      = 0x8;
+        constexpr uintptr_t OFF_HEADING        = 0x14;
+        constexpr uintptr_t OFF_MATRIX         = 0x18;
+        constexpr uintptr_t OFF_MOVE_SPEED     = 0x78;
+        constexpr uintptr_t OFF_TURN_SPEED     = 0x84;
+        constexpr uintptr_t OFF_DOOR_LOCK      = 0x68C;
+        constexpr uintptr_t OFF_MONEY          = 0xF0;
+        constexpr uintptr_t OFF_DISP_MONEY     = 0xF4;
     #endif
+
+    struct CVector
+    {
+        float x, y, z;
+    };
 
     // Function pointer types for resolved game symbols
     typedef void* (*FindPlayerPed_t)(int playerNum);
+    typedef void* (*FindPlayerVehicle_t)(int playerNum, bool bIncludeRemote);
+    typedef void* (*FindPlayerWanted_t)(int playerNum);
     typedef void  (*AsciiToGxtChar_t)(const char* src, unsigned short* dst);
     // CHud::SetHelpMessage overloads
     typedef void  (*SetHelpMessage6_t)(const char* helpKey, unsigned short* gxtText, bool quickMessage, bool permanent, bool addToBrief, unsigned int duration);
@@ -51,14 +75,50 @@ namespace AMLua
     // CMessages::AddMessageJumpQ fallback
     typedef void  (*AddMessageJumpQ_t)(const char* key, unsigned short* gxtText, unsigned int time, unsigned short flag, bool bPreviousBrief);
     typedef void  (*VehicleFix_t)(void* vehicle);
+    typedef void  (*VehicleBlowUp_t)(void* vehicle, void* culprit, unsigned char flags);
+    typedef void  (*EntityTeleport_t)(void* entity, CVector dest, bool resetRotation);
+    typedef void  (*AddExplosion_t)(void* victim, void* creator, int type, const CVector& pos, unsigned int time, bool makeSound, float camShake, bool bInvisible);
+    typedef void  (*TriggerExplosion_t)(const CVector& pos, float effectRadius, float impulseMag, void* explodingEntity, void* explosionOwner, bool blowUpQuick, float damagePercentage);
+    typedef float (*FindGroundZForCoord_t)(float x, float y);
+    typedef float (*FindGroundZFor3DCoord_t)(float x, float y, float z, bool* pBool, void** ppEnt);
+    typedef void  (*SetGameClock_t)(unsigned char hour, unsigned char min, unsigned char day);
+    typedef void  (*ForceWeatherNow_t)(short weatherType);
+    typedef void  (*ForceWeather_t)(short weatherType);
+    typedef void  (*ReleaseWeather_t)();
+    typedef void  (*SetWantedLevel_t)(void* wanted, int level);
+    typedef void  (*SetWantedLevelNoDrop_t)(void* wanted, int level);
+    typedef int   (*GetWantedLevel_t)(void* wanted);
 
-    static FindPlayerPed_t     pfnFindPlayerPed = nullptr;
-    static AsciiToGxtChar_t    pfnAsciiToGxtChar = nullptr;
-    static SetHelpMessage6_t   pfnSetHelpMessage6 = nullptr;
-    static SetHelpMessage5_t   pfnSetHelpMessage5 = nullptr;
-    static SetHelpMessage4_t   pfnSetHelpMessage4 = nullptr;
-    static AddMessageJumpQ_t   pfnAddMessageJumpQ = nullptr;
-    static VehicleFix_t        pfnVehicleFix = nullptr;
+    static FindPlayerPed_t         pfnFindPlayerPed = nullptr;
+    static FindPlayerVehicle_t     pfnFindPlayerVehicle = nullptr;
+    static FindPlayerWanted_t      pfnFindPlayerWanted = nullptr;
+    static AsciiToGxtChar_t        pfnAsciiToGxtChar = nullptr;
+    static SetHelpMessage6_t       pfnSetHelpMessage6 = nullptr;
+    static SetHelpMessage5_t       pfnSetHelpMessage5 = nullptr;
+    static SetHelpMessage4_t       pfnSetHelpMessage4 = nullptr;
+    static AddMessageJumpQ_t       pfnAddMessageJumpQ = nullptr;
+    static VehicleFix_t            pfnVehicleFix = nullptr;
+    static VehicleBlowUp_t         pfnVehicleBlowUp = nullptr;
+    static EntityTeleport_t        pfnEntityTeleport = nullptr;
+    static AddExplosion_t          pfnAddExplosion = nullptr;
+    static TriggerExplosion_t      pfnTriggerExplosion = nullptr;
+    static FindGroundZForCoord_t   pfnFindGroundZForCoord = nullptr;
+    static FindGroundZFor3DCoord_t pfnFindGroundZFor3DCoord = nullptr;
+    static SetGameClock_t          pfnSetGameClock = nullptr;
+    static ForceWeatherNow_t       pfnForceWeatherNow = nullptr;
+    static ForceWeather_t          pfnForceWeather = nullptr;
+    static ReleaseWeather_t        pfnReleaseWeather = nullptr;
+    static SetWantedLevel_t        pfnSetWantedLevel = nullptr;
+    static SetWantedLevelNoDrop_t  pfnSetWantedLevelNoDrop = nullptr;
+    static GetWantedLevel_t        pfnGetWantedLevel = nullptr;
+
+    // Direct game memory pointers
+    static float*                  pTimeScale = nullptr;
+    static float*                  pGameFPS = nullptr;
+    static unsigned char*          pClockHours = nullptr;
+    static unsigned char*          pClockMinutes = nullptr;
+    static void*                   pWorldPlayers = nullptr;
+    static int                     s_CachedWantedLevel = 0;
 
     const char* GetLogFilePath()
     {
@@ -158,7 +218,7 @@ namespace AMLua
         if (addr < 0x10000 || addr >= 0x00007FFFFFFFFFFFULL) return false;
         #endif
 
-        if ((addr % sizeof(void*)) != 0) return false;
+        if ((addr % sizeof(void*)) != 0 && size >= sizeof(void*)) return false;
 
         // write(-1, ptr, size) asks the kernel to validate the user buffer without segfaulting
         if (write(-1, ptr, size) < 0 && errno == EFAULT)
@@ -198,6 +258,108 @@ namespace AMLua
         return nullptr;
     }
 
+    // Safely retrieve entity position from matrix or placement
+    static bool GetEntityPosition(void* entity, float& x, float& y, float& z)
+    {
+        if (!IsValidGameObject(entity)) return false;
+
+        uintptr_t pMatrix = *(uintptr_t*)((uintptr_t)entity + OFF_MATRIX);
+        if (IsValidMemory((void*)pMatrix, 0x40))
+        {
+            float* posMat = (float*)(pMatrix + 0x30);
+            if (IsValidMemory(posMat, sizeof(float) * 3))
+            {
+                x = posMat[0];
+                y = posMat[1];
+                z = posMat[2];
+                return true;
+            }
+        }
+
+        float* posPlace = (float*)((uintptr_t)entity + OFF_PLACEMENT);
+        if (IsValidMemory(posPlace, sizeof(float) * 3))
+        {
+            x = posPlace[0];
+            y = posPlace[1];
+            z = posPlace[2];
+            return true;
+        }
+
+        return false;
+    }
+
+    // Safely update entity position and reset velocity for clean teleportation
+    static bool SetEntityPosition(void* entity, float x, float y, float z)
+    {
+        if (!IsValidGameObject(entity)) return false;
+
+        // Update placement position
+        float* posPlace = (float*)((uintptr_t)entity + OFF_PLACEMENT);
+        if (IsValidMemory(posPlace, sizeof(float) * 3))
+        {
+            posPlace[0] = x;
+            posPlace[1] = y;
+            posPlace[2] = z;
+        }
+
+        // Update matrix position if matrix is present
+        uintptr_t pMatrix = *(uintptr_t*)((uintptr_t)entity + OFF_MATRIX);
+        if (IsValidMemory((void*)pMatrix, 0x40))
+        {
+            float* posMat = (float*)(pMatrix + 0x30);
+            if (IsValidMemory(posMat, sizeof(float) * 3))
+            {
+                posMat[0] = x;
+                posMat[1] = y;
+                posMat[2] = z;
+            }
+        }
+
+        // Reset velocity so entity doesn't fling wildly with past momentum
+        float* pMove = (float*)((uintptr_t)entity + OFF_MOVE_SPEED);
+        if (IsValidMemory(pMove, sizeof(float) * 3))
+        {
+            pMove[0] = 0.0f;
+            pMove[1] = 0.0f;
+            pMove[2] = 0.0f;
+        }
+
+        float* pTurn = (float*)((uintptr_t)entity + OFF_TURN_SPEED);
+        if (IsValidMemory(pTurn, sizeof(float) * 3))
+        {
+            pTurn[0] = 0.0f;
+            pTurn[1] = 0.0f;
+            pTurn[2] = 0.0f;
+        }
+
+        // Engine teleport if symbol is present
+        if (pfnEntityTeleport)
+        {
+            CVector dest = { x, y, z };
+            pfnEntityTeleport(entity, dest, false);
+        }
+
+        return true;
+    }
+
+    // Helper to create explosion via game engine
+    static bool CreateExplosionInternal(float x, float y, float z, int type, float radius, bool makeSound, float camShake)
+    {
+        CVector pos = { x, y, z };
+        if (pfnAddExplosion)
+        {
+            pfnAddExplosion(nullptr, nullptr, type, pos, 0, makeSound, camShake, false);
+            return true;
+        }
+        else if (pfnTriggerExplosion)
+        {
+            pfnTriggerExplosion(pos, radius, radius * 0.5f, nullptr, nullptr, false, 100.0f);
+            return true;
+        }
+        Log("[Explosion] No explosion function available");
+        return false;
+    }
+
     // ==========================================
     // Lua API: Player
     // ==========================================
@@ -222,22 +384,29 @@ namespace AMLua
         return 1;
     }
 
-    // Player.SetHealth(ped, hp)
+    // Player.SetHealth(ped, hp) or Player.SetHealth(hp)
     static int Lua_Player_SetHealth(lua_State* L)
     {
-        void* ped = GetPointerFromArg(L, 1);
-        if (!IsValidGameObject(ped))
+        int top = lua_gettop(L);
+        void* ped = nullptr;
+        float hp = 100.0f;
+
+        if (top >= 2)
         {
-            return 0; // Silently and safely ignore if invalid
+            ped = GetPointerFromArg(L, 1);
+            hp = (float)luaL_checknumber(L, 2);
         }
+        else if (top == 1)
+        {
+            if (pfnFindPlayerPed) ped = pfnFindPlayerPed(-1);
+            hp = (float)luaL_checknumber(L, 1);
+        }
+
+        if (!IsValidGameObject(ped)) return 0;
 
         void* pHealth = (void*)((uintptr_t)ped + OFF_PED_HEALTH);
-        if (!IsValidMemory(pHealth, sizeof(float)))
-        {
-            return 0;
-        }
+        if (!IsValidMemory(pHealth, sizeof(float))) return 0;
 
-        float hp = (float)luaL_checknumber(L, 2);
         if (hp < 0.0f) hp = 0.0f;
         if (hp > 1000.0f) hp = 1000.0f;
 
@@ -245,10 +414,13 @@ namespace AMLua
         return 0;
     }
 
-    // Player.GetHealth(ped) -> number
+    // Player.GetHealth([ped]) -> number
     static int Lua_Player_GetHealth(lua_State* L)
     {
-        void* ped = GetPointerFromArg(L, 1);
+        void* ped = nullptr;
+        if (lua_gettop(L) >= 1) ped = GetPointerFromArg(L, 1);
+        if (!IsValidGameObject(ped) && pfnFindPlayerPed) ped = pfnFindPlayerPed(-1);
+
         if (!IsValidGameObject(ped))
         {
             lua_pushnumber(L, 0.0);
@@ -267,22 +439,29 @@ namespace AMLua
         return 1;
     }
 
-    // Player.SetArmour(ped, armour)
+    // Player.SetArmour(ped, armour) or Player.SetArmour(armour)
     static int Lua_Player_SetArmour(lua_State* L)
     {
-        void* ped = GetPointerFromArg(L, 1);
-        if (!IsValidGameObject(ped))
+        int top = lua_gettop(L);
+        void* ped = nullptr;
+        float armour = 100.0f;
+
+        if (top >= 2)
         {
-            return 0;
+            ped = GetPointerFromArg(L, 1);
+            armour = (float)luaL_checknumber(L, 2);
         }
+        else if (top == 1)
+        {
+            if (pfnFindPlayerPed) ped = pfnFindPlayerPed(-1);
+            armour = (float)luaL_checknumber(L, 1);
+        }
+
+        if (!IsValidGameObject(ped)) return 0;
 
         void* pArmour = (void*)((uintptr_t)ped + OFF_PED_ARMOUR);
-        if (!IsValidMemory(pArmour, sizeof(float)))
-        {
-            return 0;
-        }
+        if (!IsValidMemory(pArmour, sizeof(float))) return 0;
 
-        float armour = (float)luaL_checknumber(L, 2);
         if (armour < 0.0f) armour = 0.0f;
         if (armour > 1000.0f) armour = 1000.0f;
 
@@ -290,10 +469,13 @@ namespace AMLua
         return 0;
     }
 
-    // Player.GetArmour(ped) -> number
+    // Player.GetArmour([ped]) -> number
     static int Lua_Player_GetArmour(lua_State* L)
     {
-        void* ped = GetPointerFromArg(L, 1);
+        void* ped = nullptr;
+        if (lua_gettop(L) >= 1) ped = GetPointerFromArg(L, 1);
+        if (!IsValidGameObject(ped) && pfnFindPlayerPed) ped = pfnFindPlayerPed(-1);
+
         if (!IsValidGameObject(ped))
         {
             lua_pushnumber(L, 0.0);
@@ -312,18 +494,497 @@ namespace AMLua
         return 1;
     }
 
+    // Player.GetPosition([ped]) -> x, y, z
+    static int Lua_Player_GetPosition(lua_State* L)
+    {
+        void* ped = nullptr;
+        if (lua_gettop(L) >= 1) ped = GetPointerFromArg(L, 1);
+        if (!IsValidGameObject(ped) && pfnFindPlayerPed) ped = pfnFindPlayerPed(-1);
+
+        float x = 0.0f, y = 0.0f, z = 0.0f;
+        if (GetEntityPosition(ped, x, y, z))
+        {
+            lua_pushnumber(L, (lua_Number)x);
+            lua_pushnumber(L, (lua_Number)y);
+            lua_pushnumber(L, (lua_Number)z);
+            return 3;
+        }
+
+        lua_pushnumber(L, 0.0);
+        lua_pushnumber(L, 0.0);
+        lua_pushnumber(L, 0.0);
+        return 3;
+    }
+
+    // Player.SetPosition(x, y, z) or Player.SetPosition(ped, x, y, z) or Player.Teleport(...)
+    static int Lua_Player_SetPosition(lua_State* L)
+    {
+        int top = lua_gettop(L);
+        void* ped = nullptr;
+        float x = 0.0f, y = 0.0f, z = 0.0f;
+
+        if (top >= 4)
+        {
+            ped = GetPointerFromArg(L, 1);
+            x = (float)luaL_checknumber(L, 2);
+            y = (float)luaL_checknumber(L, 3);
+            z = (float)luaL_checknumber(L, 4);
+        }
+        else if (top >= 3)
+        {
+            if (pfnFindPlayerPed) ped = pfnFindPlayerPed(-1);
+            x = (float)luaL_checknumber(L, 1);
+            y = (float)luaL_checknumber(L, 2);
+            z = (float)luaL_checknumber(L, 3);
+        }
+        else
+        {
+            return luaL_error(L, "Player.SetPosition expects (x, y, z) or (ped, x, y, z)");
+        }
+
+        // If player is in a vehicle and local player is teleporting, move the vehicle
+        if (pfnFindPlayerVehicle)
+        {
+            void* veh = pfnFindPlayerVehicle(-1, false);
+            if (IsValidGameObject(veh))
+            {
+                SetEntityPosition(veh, x, y, z);
+                lua_pushboolean(L, 1);
+                return 1;
+            }
+        }
+
+        bool ok = SetEntityPosition(ped, x, y, z);
+        lua_pushboolean(L, ok ? 1 : 0);
+        return 1;
+    }
+
+    // Player.GetVehicle([ped]) -> lightuserdata or nil
+    static int Lua_Player_GetVehicle(lua_State* L)
+    {
+        void* veh = nullptr;
+        if (pfnFindPlayerVehicle)
+        {
+            veh = pfnFindPlayerVehicle(-1, false);
+        }
+
+        if (IsValidGameObject(veh))
+        {
+            lua_pushlightuserdata(L, veh);
+        }
+        else
+        {
+            lua_pushnil(L);
+        }
+        return 1;
+    }
+
+    // Player.IsInVehicle([ped]) -> boolean
+    static int Lua_Player_IsInVehicle(lua_State* L)
+    {
+        void* veh = nullptr;
+        if (pfnFindPlayerVehicle)
+        {
+            veh = pfnFindPlayerVehicle(-1, false);
+        }
+        bool inVeh = IsValidGameObject(veh);
+        lua_pushboolean(L, inVeh ? 1 : 0);
+        return 1;
+    }
+
+    // Player.GetHeading([ped]) -> degrees (0-360)
+    static int Lua_Player_GetHeading(lua_State* L)
+    {
+        void* ped = nullptr;
+        if (lua_gettop(L) >= 1) ped = GetPointerFromArg(L, 1);
+        if (!IsValidGameObject(ped) && pfnFindPlayerPed) ped = pfnFindPlayerPed(-1);
+        if (!IsValidGameObject(ped))
+        {
+            lua_pushnumber(L, 0.0);
+            return 1;
+        }
+
+        float* pHeading = (float*)((uintptr_t)ped + OFF_HEADING);
+        float rad = (IsValidMemory(pHeading, sizeof(float))) ? *pHeading : 0.0f;
+        float deg = rad * 57.2957795f;
+        if (deg < 0.0f) deg += 360.0f;
+        lua_pushnumber(L, (lua_Number)deg);
+        return 1;
+    }
+
+    // Player.SetHeading([ped], deg)
+    static int Lua_Player_SetHeading(lua_State* L)
+    {
+        int top = lua_gettop(L);
+        void* ped = nullptr;
+        float deg = 0.0f;
+
+        if (top >= 2)
+        {
+            ped = GetPointerFromArg(L, 1);
+            deg = (float)luaL_checknumber(L, 2);
+        }
+        else
+        {
+            if (pfnFindPlayerPed) ped = pfnFindPlayerPed(-1);
+            deg = (float)luaL_checknumber(L, 1);
+        }
+
+        if (!IsValidGameObject(ped)) return 0;
+
+        float rad = deg * 0.0174532925f;
+        float* pHeading = (float*)((uintptr_t)ped + OFF_HEADING);
+        if (IsValidMemory(pHeading, sizeof(float)))
+        {
+            *pHeading = rad;
+        }
+        return 0;
+    }
+
+    // Player.GetWantedLevel() -> integer
+    static int Lua_Player_GetWantedLevel(lua_State* L)
+    {
+        void* wanted = nullptr;
+        if (pfnFindPlayerWanted) wanted = pfnFindPlayerWanted(0);
+        if (IsValidMemory(wanted, sizeof(void*)))
+        {
+            if (pfnGetWantedLevel)
+            {
+                int lvl = pfnGetWantedLevel(wanted);
+                lua_pushinteger(L, lvl);
+                return 1;
+            }
+
+            int* pLvl = (int*)((uintptr_t)wanted + 0x24);
+            if (IsValidMemory(pLvl, sizeof(int)) && *pLvl >= 0 && *pLvl <= 6)
+            {
+                lua_pushinteger(L, *pLvl);
+                return 1;
+            }
+        }
+        lua_pushinteger(L, s_CachedWantedLevel);
+        return 1;
+    }
+
+    // Player.SetWantedLevel(level)
+    static int Lua_Player_SetWantedLevel(lua_State* L)
+    {
+        int level = (int)luaL_checkinteger(L, 1);
+        if (level < 0) level = 0;
+        if (level > 6) level = 6;
+        s_CachedWantedLevel = level;
+
+        void* wanted = nullptr;
+        if (pfnFindPlayerWanted) wanted = pfnFindPlayerWanted(0);
+        if (IsValidMemory(wanted, sizeof(void*)))
+        {
+            if (pfnSetWantedLevel)
+            {
+                pfnSetWantedLevel(wanted, level);
+            }
+            else if (pfnSetWantedLevelNoDrop)
+            {
+                pfnSetWantedLevelNoDrop(wanted, level);
+            }
+
+            int* pLvl = (int*)((uintptr_t)wanted + 0x24);
+            if (IsValidMemory(pLvl, sizeof(int)))
+            {
+                *pLvl = level;
+            }
+        }
+        return 0;
+    }
+
+    // Player.ClearWantedLevel()
+    static int Lua_Player_ClearWantedLevel(lua_State* L)
+    {
+        s_CachedWantedLevel = 0;
+        void* wanted = nullptr;
+        if (pfnFindPlayerWanted) wanted = pfnFindPlayerWanted(0);
+        if (IsValidMemory(wanted, sizeof(void*)))
+        {
+            if (pfnSetWantedLevel) pfnSetWantedLevel(wanted, 0);
+            else if (pfnSetWantedLevelNoDrop) pfnSetWantedLevelNoDrop(wanted, 0);
+
+            int* pLvl = (int*)((uintptr_t)wanted + 0x24);
+            if (IsValidMemory(pLvl, sizeof(int)))
+            {
+                *pLvl = 0;
+            }
+        }
+        return 0;
+    }
+
+    // Player.GiveMoney(amount)
+    static int Lua_Player_GiveMoney(lua_State* L)
+    {
+        int amount = (int)luaL_checkinteger(L, 1);
+        if (!pWorldPlayers) return 0;
+
+        int* pMoney = (int*)((uintptr_t)pWorldPlayers + OFF_MONEY);
+        int* pDispMoney = (int*)((uintptr_t)pWorldPlayers + OFF_DISP_MONEY);
+
+        if (IsValidMemory(pMoney, sizeof(int)))
+        {
+            *pMoney += amount;
+        }
+        if (IsValidMemory(pDispMoney, sizeof(int)))
+        {
+            *pDispMoney += amount;
+        }
+        return 0;
+    }
+
+    // Player.SetMoney(amount)
+    static int Lua_Player_SetMoney(lua_State* L)
+    {
+        int amount = (int)luaL_checkinteger(L, 1);
+        if (!pWorldPlayers) return 0;
+
+        int* pMoney = (int*)((uintptr_t)pWorldPlayers + OFF_MONEY);
+        int* pDispMoney = (int*)((uintptr_t)pWorldPlayers + OFF_DISP_MONEY);
+
+        if (IsValidMemory(pMoney, sizeof(int)))
+        {
+            *pMoney = amount;
+        }
+        if (IsValidMemory(pDispMoney, sizeof(int)))
+        {
+            *pDispMoney = amount;
+        }
+        return 0;
+    }
+
+    // Player.GetMoney() -> integer
+    static int Lua_Player_GetMoney(lua_State* L)
+    {
+        if (pWorldPlayers)
+        {
+            int* pMoney = (int*)((uintptr_t)pWorldPlayers + OFF_MONEY);
+            if (IsValidMemory(pMoney, sizeof(int)))
+            {
+                lua_pushinteger(L, *pMoney);
+                return 1;
+            }
+        }
+        lua_pushinteger(L, 0);
+        return 1;
+    }
+
     // ==========================================
     // Lua API: Vehicle
     // ==========================================
 
-    // Vehicle.Repair(vehiclePtr)
+    // Vehicle.GetPlayerVehicle() -> lightuserdata or nil
+    static int Lua_Vehicle_GetPlayerVehicle(lua_State* L)
+    {
+        return Lua_Player_GetVehicle(L);
+    }
+
+    // Vehicle.GetPosition([veh]) -> x, y, z
+    static int Lua_Vehicle_GetPosition(lua_State* L)
+    {
+        void* veh = nullptr;
+        if (lua_gettop(L) >= 1) veh = GetPointerFromArg(L, 1);
+        if (!IsValidGameObject(veh) && pfnFindPlayerVehicle)
+        {
+            veh = pfnFindPlayerVehicle(-1, false);
+        }
+
+        float x = 0.0f, y = 0.0f, z = 0.0f;
+        if (GetEntityPosition(veh, x, y, z))
+        {
+            lua_pushnumber(L, (lua_Number)x);
+            lua_pushnumber(L, (lua_Number)y);
+            lua_pushnumber(L, (lua_Number)z);
+            return 3;
+        }
+
+        lua_pushnumber(L, 0.0);
+        lua_pushnumber(L, 0.0);
+        lua_pushnumber(L, 0.0);
+        return 3;
+    }
+
+    // Vehicle.SetPosition(veh, x, y, z) or Vehicle.SetPosition(x, y, z) or Vehicle.Teleport(...)
+    static int Lua_Vehicle_SetPosition(lua_State* L)
+    {
+        int top = lua_gettop(L);
+        void* veh = nullptr;
+        float x = 0.0f, y = 0.0f, z = 0.0f;
+
+        if (top >= 4)
+        {
+            veh = GetPointerFromArg(L, 1);
+            x = (float)luaL_checknumber(L, 2);
+            y = (float)luaL_checknumber(L, 3);
+            z = (float)luaL_checknumber(L, 4);
+        }
+        else if (top >= 3)
+        {
+            if (pfnFindPlayerVehicle) veh = pfnFindPlayerVehicle(-1, false);
+            x = (float)luaL_checknumber(L, 1);
+            y = (float)luaL_checknumber(L, 2);
+            z = (float)luaL_checknumber(L, 3);
+        }
+        else
+        {
+            return luaL_error(L, "Vehicle.SetPosition expects (x, y, z) or (veh, x, y, z)");
+        }
+
+        bool ok = SetEntityPosition(veh, x, y, z);
+        lua_pushboolean(L, ok ? 1 : 0);
+        return 1;
+    }
+
+    // Vehicle.GetVelocity([veh]) -> vx, vy, vz
+    static int Lua_Vehicle_GetVelocity(lua_State* L)
+    {
+        void* veh = GetPointerFromArg(L, 1);
+        if (!IsValidGameObject(veh) && pfnFindPlayerVehicle)
+        {
+            veh = pfnFindPlayerVehicle(-1, false);
+        }
+        if (!IsValidGameObject(veh))
+        {
+            lua_pushnumber(L, 0.0);
+            lua_pushnumber(L, 0.0);
+            lua_pushnumber(L, 0.0);
+            return 3;
+        }
+
+        float* pMove = (float*)((uintptr_t)veh + OFF_MOVE_SPEED);
+        if (IsValidMemory(pMove, sizeof(float) * 3))
+        {
+            lua_pushnumber(L, (lua_Number)pMove[0]);
+            lua_pushnumber(L, (lua_Number)pMove[1]);
+            lua_pushnumber(L, (lua_Number)pMove[2]);
+        }
+        else
+        {
+            lua_pushnumber(L, 0.0);
+            lua_pushnumber(L, 0.0);
+            lua_pushnumber(L, 0.0);
+        }
+        return 3;
+    }
+
+    // Vehicle.SetVelocity(veh, vx, vy, vz) or Vehicle.SetVelocity(vx, vy, vz)
+    static int Lua_Vehicle_SetVelocity(lua_State* L)
+    {
+        int top = lua_gettop(L);
+        void* veh = nullptr;
+        float vx = 0.0f, vy = 0.0f, vz = 0.0f;
+
+        if (top >= 4)
+        {
+            veh = GetPointerFromArg(L, 1);
+            vx = (float)luaL_checknumber(L, 2);
+            vy = (float)luaL_checknumber(L, 3);
+            vz = (float)luaL_checknumber(L, 4);
+        }
+        else
+        {
+            if (pfnFindPlayerVehicle) veh = pfnFindPlayerVehicle(-1, false);
+            vx = (float)luaL_checknumber(L, 1);
+            vy = (float)luaL_checknumber(L, 2);
+            vz = (float)luaL_checknumber(L, 3);
+        }
+
+        if (!IsValidGameObject(veh)) return 0;
+
+        float* pMove = (float*)((uintptr_t)veh + OFF_MOVE_SPEED);
+        if (IsValidMemory(pMove, sizeof(float) * 3))
+        {
+            pMove[0] = vx;
+            pMove[1] = vy;
+            pMove[2] = vz;
+        }
+        return 0;
+    }
+
+    // Vehicle.GetSpeed([veh]) -> speed in km/h
+    static int Lua_Vehicle_GetSpeed(lua_State* L)
+    {
+        void* veh = GetPointerFromArg(L, 1);
+        if (!IsValidGameObject(veh) && pfnFindPlayerVehicle)
+        {
+            veh = pfnFindPlayerVehicle(-1, false);
+        }
+        if (!IsValidGameObject(veh))
+        {
+            lua_pushnumber(L, 0.0);
+            return 1;
+        }
+
+        float* pMove = (float*)((uintptr_t)veh + OFF_MOVE_SPEED);
+        if (IsValidMemory(pMove, sizeof(float) * 3))
+        {
+            float speedUnits = sqrtf(pMove[0]*pMove[0] + pMove[1]*pMove[1] + pMove[2]*pMove[2]);
+            float kmh = speedUnits * 200.0f;
+            lua_pushnumber(L, (lua_Number)kmh);
+        }
+        else
+        {
+            lua_pushnumber(L, 0.0);
+        }
+        return 1;
+    }
+
+    // Vehicle.SetSpeed(veh, kmh) or Vehicle.SetSpeed(kmh)
+    static int Lua_Vehicle_SetSpeed(lua_State* L)
+    {
+        int top = lua_gettop(L);
+        void* veh = nullptr;
+        float kmh = 0.0f;
+
+        if (top >= 2)
+        {
+            veh = GetPointerFromArg(L, 1);
+            kmh = (float)luaL_checknumber(L, 2);
+        }
+        else
+        {
+            if (pfnFindPlayerVehicle) veh = pfnFindPlayerVehicle(-1, false);
+            kmh = (float)luaL_checknumber(L, 1);
+        }
+
+        if (!IsValidGameObject(veh)) return 0;
+
+        float targetUnits = kmh / 200.0f;
+        float* pMove = (float*)((uintptr_t)veh + OFF_MOVE_SPEED);
+        if (!IsValidMemory(pMove, sizeof(float) * 3)) return 0;
+
+        float currentUnits = sqrtf(pMove[0]*pMove[0] + pMove[1]*pMove[1] + pMove[2]*pMove[2]);
+        if (currentUnits > 0.001f)
+        {
+            float factor = targetUnits / currentUnits;
+            pMove[0] *= factor;
+            pMove[1] *= factor;
+            pMove[2] *= factor;
+        }
+        else
+        {
+            // Pushed in heading direction if stopped
+            float* pHeading = (float*)((uintptr_t)veh + OFF_HEADING);
+            float heading = (IsValidMemory(pHeading, sizeof(float))) ? *pHeading : 0.0f;
+            pMove[0] = -sinf(heading) * targetUnits;
+            pMove[1] = cosf(heading) * targetUnits;
+            pMove[2] = 0.0f;
+        }
+        return 0;
+    }
+
+    // Vehicle.Repair([veh])
     static int Lua_Vehicle_Repair(lua_State* L)
     {
         void* veh = GetPointerFromArg(L, 1);
-        if (!IsValidGameObject(veh))
+        if (!IsValidGameObject(veh) && pfnFindPlayerVehicle)
         {
-            return 0;
+            veh = pfnFindPlayerVehicle(-1, false);
         }
+        if (!IsValidGameObject(veh)) return 0;
 
         if (pfnVehicleFix)
         {
@@ -338,10 +999,14 @@ namespace AMLua
         return 0;
     }
 
-    // Vehicle.GetHealth(vehiclePtr) -> number
+    // Vehicle.GetHealth([veh]) -> number
     static int Lua_Vehicle_GetHealth(lua_State* L)
     {
         void* veh = GetPointerFromArg(L, 1);
+        if (!IsValidGameObject(veh) && pfnFindPlayerVehicle)
+        {
+            veh = pfnFindPlayerVehicle(-1, false);
+        }
         if (!IsValidGameObject(veh))
         {
             lua_pushnumber(L, 0.0);
@@ -360,22 +1025,29 @@ namespace AMLua
         return 1;
     }
 
-    // Vehicle.SetHealth(vehiclePtr, hp)
+    // Vehicle.SetHealth(veh, hp) or Vehicle.SetHealth(hp)
     static int Lua_Vehicle_SetHealth(lua_State* L)
     {
-        void* veh = GetPointerFromArg(L, 1);
-        if (!IsValidGameObject(veh))
+        int top = lua_gettop(L);
+        void* veh = nullptr;
+        float hp = 1000.0f;
+
+        if (top >= 2)
         {
-            return 0;
+            veh = GetPointerFromArg(L, 1);
+            hp = (float)luaL_checknumber(L, 2);
         }
+        else
+        {
+            if (pfnFindPlayerVehicle) veh = pfnFindPlayerVehicle(-1, false);
+            hp = (float)luaL_checknumber(L, 1);
+        }
+
+        if (!IsValidGameObject(veh)) return 0;
 
         void* pVehHealth = (void*)((uintptr_t)veh + OFF_VEH_HEALTH);
-        if (!IsValidMemory(pVehHealth, sizeof(float)))
-        {
-            return 0;
-        }
+        if (!IsValidMemory(pVehHealth, sizeof(float))) return 0;
 
-        float hp = (float)luaL_checknumber(L, 2);
         if (hp < 0.0f) hp = 0.0f;
         if (hp > 2000.0f) hp = 2000.0f;
 
@@ -383,8 +1055,252 @@ namespace AMLua
         return 0;
     }
 
+    // Vehicle.BlowUp([veh]) / Vehicle.Explode([veh])
+    static int Lua_Vehicle_BlowUp(lua_State* L)
+    {
+        void* veh = GetPointerFromArg(L, 1);
+        if (!IsValidGameObject(veh) && pfnFindPlayerVehicle)
+        {
+            veh = pfnFindPlayerVehicle(-1, false);
+        }
+        if (!IsValidGameObject(veh)) return 0;
+
+        void* pVehHealth = (void*)((uintptr_t)veh + OFF_VEH_HEALTH);
+        if (IsValidMemory(pVehHealth, sizeof(float)))
+        {
+            *(float*)pVehHealth = 0.0f;
+        }
+
+        if (pfnVehicleBlowUp)
+        {
+            pfnVehicleBlowUp(veh, nullptr, 0);
+        }
+
+        float x = 0, y = 0, z = 0;
+        if (GetEntityPosition(veh, x, y, z))
+        {
+            CreateExplosionInternal(x, y, z, 4, 10.0f, true, 1.0f);
+        }
+        return 0;
+    }
+
+    // Vehicle.SetDoorLock(veh, lockType) or Vehicle.SetDoorLock(lockType)
+    static int Lua_Vehicle_SetDoorLock(lua_State* L)
+    {
+        int top = lua_gettop(L);
+        void* veh = nullptr;
+        int lockType = 0;
+
+        if (top >= 2)
+        {
+            veh = GetPointerFromArg(L, 1);
+            lockType = (int)luaL_checkinteger(L, 2);
+        }
+        else
+        {
+            if (pfnFindPlayerVehicle) veh = pfnFindPlayerVehicle(-1, false);
+            lockType = (int)luaL_checkinteger(L, 1);
+        }
+
+        if (!IsValidGameObject(veh)) return 0;
+
+        unsigned int* pDoorLock = (unsigned int*)((uintptr_t)veh + OFF_DOOR_LOCK);
+        if (IsValidMemory(pDoorLock, sizeof(unsigned int)))
+        {
+            *pDoorLock = (unsigned int)lockType;
+        }
+        return 0;
+    }
+
+    // Vehicle.SetLocked(veh, bool) or Vehicle.SetLocked(bool)
+    static int Lua_Vehicle_SetLocked(lua_State* L)
+    {
+        int top = lua_gettop(L);
+        void* veh = nullptr;
+        bool locked = true;
+
+        if (top >= 2)
+        {
+            veh = GetPointerFromArg(L, 1);
+            locked = lua_toboolean(L, 2) != 0;
+        }
+        else
+        {
+            if (pfnFindPlayerVehicle) veh = pfnFindPlayerVehicle(-1, false);
+            locked = lua_toboolean(L, 1) != 0;
+        }
+
+        if (!IsValidGameObject(veh)) return 0;
+
+        unsigned int* pDoorLock = (unsigned int*)((uintptr_t)veh + OFF_DOOR_LOCK);
+        if (IsValidMemory(pDoorLock, sizeof(unsigned int)))
+        {
+            *pDoorLock = locked ? 2 : 1; // 2 = DOORLOCK_LOCKED, 1 = DOORLOCK_UNLOCKED
+        }
+        return 0;
+    }
+
+    // Vehicle.IsLocked([veh]) -> boolean
+    static int Lua_Vehicle_IsLocked(lua_State* L)
+    {
+        void* veh = GetPointerFromArg(L, 1);
+        if (!IsValidGameObject(veh) && pfnFindPlayerVehicle)
+        {
+            veh = pfnFindPlayerVehicle(-1, false);
+        }
+        if (!IsValidGameObject(veh))
+        {
+            lua_pushboolean(L, 0);
+            return 1;
+        }
+
+        unsigned int* pDoorLock = (unsigned int*)((uintptr_t)veh + OFF_DOOR_LOCK);
+        if (IsValidMemory(pDoorLock, sizeof(unsigned int)))
+        {
+            lua_pushboolean(L, (*pDoorLock == 2 || *pDoorLock == 4) ? 1 : 0);
+            return 1;
+        }
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+
+    // Vehicle.GetHeading([veh]) -> degrees (0-360)
+    static int Lua_Vehicle_GetHeading(lua_State* L)
+    {
+        void* veh = nullptr;
+        if (lua_gettop(L) >= 1) veh = GetPointerFromArg(L, 1);
+        if (!IsValidGameObject(veh) && pfnFindPlayerVehicle) veh = pfnFindPlayerVehicle(-1, false);
+        if (!IsValidGameObject(veh))
+        {
+            lua_pushnumber(L, 0.0);
+            return 1;
+        }
+
+        float* pHeading = (float*)((uintptr_t)veh + OFF_HEADING);
+        float rad = (IsValidMemory(pHeading, sizeof(float))) ? *pHeading : 0.0f;
+        float deg = rad * 57.2957795f;
+        if (deg < 0.0f) deg += 360.0f;
+        lua_pushnumber(L, (lua_Number)deg);
+        return 1;
+    }
+
+    // Vehicle.SetHeading([veh], deg)
+    static int Lua_Vehicle_SetHeading(lua_State* L)
+    {
+        int top = lua_gettop(L);
+        void* veh = nullptr;
+        float deg = 0.0f;
+
+        if (top >= 2)
+        {
+            veh = GetPointerFromArg(L, 1);
+            deg = (float)luaL_checknumber(L, 2);
+        }
+        else
+        {
+            if (pfnFindPlayerVehicle) veh = pfnFindPlayerVehicle(-1, false);
+            deg = (float)luaL_checknumber(L, 1);
+        }
+
+        if (!IsValidGameObject(veh)) return 0;
+
+        float rad = deg * 0.0174532925f;
+        float* pHeading = (float*)((uintptr_t)veh + OFF_HEADING);
+        if (IsValidMemory(pHeading, sizeof(float)))
+        {
+            *pHeading = rad;
+        }
+        return 0;
+    }
+
     // ==========================================
-    // Lua API: Game / UI
+    // Lua API: Explosion
+    // ==========================================
+
+    // Explosion.Create(x, y, z, [type], [radius], [sound], [shake])
+    static int Lua_Explosion_Create(lua_State* L)
+    {
+        float x = (float)luaL_checknumber(L, 1);
+        float y = (float)luaL_checknumber(L, 2);
+        float z = (float)luaL_checknumber(L, 3);
+        int type = (int)luaL_optinteger(L, 4, 3); // default 3 = CAR / Medium explosion
+        float radius = (float)luaL_optnumber(L, 5, 10.0);
+        bool sound = lua_isboolean(L, 6) ? (lua_toboolean(L, 6) != 0) : true;
+        float shake = (float)luaL_optnumber(L, 7, 1.0);
+
+        bool ok = CreateExplosionInternal(x, y, z, type, radius, sound, shake);
+        lua_pushboolean(L, ok ? 1 : 0);
+        return 1;
+    }
+
+    // Explosion.CreateAtPlayer([type], [radius], [sound], [shake])
+    static int Lua_Explosion_CreateAtPlayer(lua_State* L)
+    {
+        void* ped = nullptr;
+        if (pfnFindPlayerPed) ped = pfnFindPlayerPed(-1);
+        if (!IsValidGameObject(ped))
+        {
+            lua_pushboolean(L, 0);
+            return 1;
+        }
+
+        float x = 0, y = 0, z = 0;
+        if (!GetEntityPosition(ped, x, y, z))
+        {
+            lua_pushboolean(L, 0);
+            return 1;
+        }
+
+        int type = (int)luaL_optinteger(L, 1, 3);
+        float radius = (float)luaL_optnumber(L, 2, 10.0);
+        bool sound = lua_isboolean(L, 3) ? (lua_toboolean(L, 3) != 0) : true;
+        float shake = (float)luaL_optnumber(L, 4, 1.0);
+
+        bool ok = CreateExplosionInternal(x, y, z, type, radius, sound, shake);
+        lua_pushboolean(L, ok ? 1 : 0);
+        return 1;
+    }
+
+    // Explosion.CreateAtVehicle([veh], [type], [radius], [sound], [shake])
+    static int Lua_Explosion_CreateAtVehicle(lua_State* L)
+    {
+        int argStart = 1;
+        void* veh = nullptr;
+        if (lua_islightuserdata(L, 1) || lua_isinteger(L, 1))
+        {
+            veh = GetPointerFromArg(L, 1);
+            argStart = 2;
+        }
+        else if (pfnFindPlayerVehicle)
+        {
+            veh = pfnFindPlayerVehicle(-1, false);
+        }
+
+        if (!IsValidGameObject(veh))
+        {
+            lua_pushboolean(L, 0);
+            return 1;
+        }
+
+        float x = 0, y = 0, z = 0;
+        if (!GetEntityPosition(veh, x, y, z))
+        {
+            lua_pushboolean(L, 0);
+            return 1;
+        }
+
+        int type = (int)luaL_optinteger(L, argStart, 4);
+        float radius = (float)luaL_optnumber(L, argStart + 1, 10.0);
+        bool sound = lua_isboolean(L, argStart + 2) ? (lua_toboolean(L, argStart + 2) != 0) : true;
+        float shake = (float)luaL_optnumber(L, argStart + 3, 1.0);
+
+        bool ok = CreateExplosionInternal(x, y, z, type, radius, sound, shake);
+        lua_pushboolean(L, ok ? 1 : 0);
+        return 1;
+    }
+
+    // ==========================================
+    // Lua API: Game / World
     // ==========================================
 
     // Display text in GTA SA native top-right dialog box (CHud::SetHelpMessage)
@@ -392,7 +1308,7 @@ namespace AMLua
     {
         if (!text || text[0] == '\0') return;
 
-        // Static circular buffer to ensure pointers passed to the engine remain valid across frames
+        // Circular buffer to ensure pointers passed to the engine remain valid across frames
         static unsigned short s_GxtBufs[4][512] = {{0}};
         static int s_GxtBufIdx = 0;
         s_GxtBufIdx = (s_GxtBufIdx + 1) % 4;
@@ -412,13 +1328,6 @@ namespace AMLua
 
         if (pfnSetHelpMessage6)
         {
-            // Call CHud::SetHelpMessage with safe parameters:
-            // arg 1: nullptr (raw custom text, skip GXT key lookup so custom string is displayed)
-            // arg 2: 16-bit GXT message pointer
-            // arg 3: bQuick = true (allows calling PrintText repeatedly so new messages appear immediately)
-            // arg 4: bDisplayForever = false
-            // arg 5: bAddToBrief = true
-            // arg 6: duration in ms (e.g. 3000)
             pfnSetHelpMessage6(nullptr, gxtBuf, true, false, true, timeMs);
         }
         else if (pfnSetHelpMessage5)
@@ -431,7 +1340,6 @@ namespace AMLua
         }
         else if (pfnAddMessageJumpQ)
         {
-            // Fallback: bottom subtitle if CHud::SetHelpMessage is not available
             pfnAddMessageJumpQ(nullptr, gxtBuf, timeMs, 0, false);
         }
         else
@@ -458,6 +1366,146 @@ namespace AMLua
         const char* msg = luaL_checkstring(L, 1);
         Log("[Lua Script] %s", msg);
         return 0;
+    }
+
+    // Game.Teleport(x, y, z) - teleports player or current vehicle seamlessly
+    static int Lua_Game_Teleport(lua_State* L)
+    {
+        return Lua_Player_SetPosition(L);
+    }
+
+    // Game.GetGroundZ(x, y, [z]) -> ground height
+    static int Lua_Game_GetGroundZ(lua_State* L)
+    {
+        float x = (float)luaL_checknumber(L, 1);
+        float y = (float)luaL_checknumber(L, 2);
+        float z = (float)luaL_optnumber(L, 3, 100.0);
+
+        float groundZ = 0.0f;
+        bool found = false;
+
+        if (pfnFindGroundZFor3DCoord)
+        {
+            bool bFound = false;
+            void* entity = nullptr;
+            groundZ = pfnFindGroundZFor3DCoord(x, y, z, &bFound, &entity);
+            if (bFound) found = true;
+        }
+
+        if (!found && pfnFindGroundZForCoord)
+        {
+            groundZ = pfnFindGroundZForCoord(x, y);
+            found = true;
+        }
+
+        if (found)
+        {
+            lua_pushnumber(L, (lua_Number)groundZ);
+        }
+        else
+        {
+            lua_pushnumber(L, (lua_Number)z);
+        }
+        return 1;
+    }
+
+    // Game.SetTime(hour, minute) / Game.SetClock(hour, minute)
+    static int Lua_Game_SetTime(lua_State* L)
+    {
+        int hour = (int)luaL_checkinteger(L, 1);
+        int minute = (int)luaL_optinteger(L, 2, 0);
+
+        if (hour < 0) hour = 0;
+        if (hour > 23) hour = 23;
+        if (minute < 0) minute = 0;
+        if (minute > 59) minute = 59;
+
+        if (pfnSetGameClock)
+        {
+            pfnSetGameClock((unsigned char)hour, (unsigned char)minute, 0);
+        }
+        else
+        {
+            if (pClockHours && IsValidMemory(pClockHours, 1)) *pClockHours = (unsigned char)hour;
+            if (pClockMinutes && IsValidMemory(pClockMinutes, 1)) *pClockMinutes = (unsigned char)minute;
+        }
+        return 0;
+    }
+
+    // Game.GetTime() / Game.GetClock() -> hour, minute
+    static int Lua_Game_GetTime(lua_State* L)
+    {
+        int hour = 12;
+        int min = 0;
+        if (pClockHours && IsValidMemory(pClockHours, 1)) hour = *pClockHours;
+        if (pClockMinutes && IsValidMemory(pClockMinutes, 1)) min = *pClockMinutes;
+
+        lua_pushinteger(L, hour);
+        lua_pushinteger(L, min);
+        return 2;
+    }
+
+    // Game.SetWeather(weatherId)
+    static int Lua_Game_SetWeather(lua_State* L)
+    {
+        int weatherId = (int)luaL_checkinteger(L, 1);
+        if (pfnForceWeatherNow)
+        {
+            pfnForceWeatherNow((short)weatherId);
+        }
+        else if (pfnForceWeather)
+        {
+            pfnForceWeather((short)weatherId);
+        }
+        return 0;
+    }
+
+    // Game.ReleaseWeather()
+    static int Lua_Game_ReleaseWeather(lua_State* L)
+    {
+        if (pfnReleaseWeather)
+        {
+            pfnReleaseWeather();
+        }
+        return 0;
+    }
+
+    // Game.SetGameSpeed(speed) / Game.SetTimeScale(speed)
+    static int Lua_Game_SetGameSpeed(lua_State* L)
+    {
+        float speed = (float)luaL_checknumber(L, 1);
+        if (speed < 0.0f) speed = 0.0f;
+        if (speed > 10.0f) speed = 10.0f;
+
+        if (pTimeScale && IsValidMemory(pTimeScale, sizeof(float)))
+        {
+            *pTimeScale = speed;
+        }
+        return 0;
+    }
+
+    // Game.GetGameSpeed() / Game.GetTimeScale() -> number
+    static int Lua_Game_GetGameSpeed(lua_State* L)
+    {
+        float speed = 1.0f;
+        if (pTimeScale && IsValidMemory(pTimeScale, sizeof(float)))
+        {
+            speed = *pTimeScale;
+        }
+        lua_pushnumber(L, (lua_Number)speed);
+        return 1;
+    }
+
+    // Game.GetFPS() -> number
+    static int Lua_Game_GetFPS(lua_State* L)
+    {
+        float fps = 30.0f;
+        if (pGameFPS && IsValidMemory(pGameFPS, sizeof(float)))
+        {
+            fps = *pGameFPS;
+        }
+        lua_pushnumber(L, (lua_Number)fps);
+        return 1;
     }
 
     // Register tick callback: Game.OnTick(fn) / AMLua.OnTick(fn)
@@ -533,7 +1581,7 @@ namespace AMLua
         else if (lua_isfunction(L, 1) && lua_gettop(L) == 1)
         {
             fnIndex = 1;
-            seconds = 1.0; // default 1.0s if omitted
+            seconds = 1.0;
         }
         else
         {
@@ -542,7 +1590,7 @@ namespace AMLua
 
         if (seconds < 0.001)
         {
-            seconds = 0.001; // Clamp to min 1ms to prevent zero-interval loops
+            seconds = 0.001;
         }
 
         lua_pushvalue(L, fnIndex);
@@ -562,19 +1610,16 @@ namespace AMLua
         return 1;
     }
 
-    // Game.SetInterval(fn, seconds) / Game.Every(seconds, fn)
     static int Lua_Game_SetInterval(lua_State* L)
     {
         return CreateTimerHelper(L, true);
     }
 
-    // Game.SetTimeout(fn, seconds) / Game.After(seconds, fn)
     static int Lua_Game_SetTimeout(lua_State* L)
     {
         return CreateTimerHelper(L, false);
     }
 
-    // Game.ClearTimer(id) / Game.ClearInterval(id) / Game.ClearTimeout(id)
     static int Lua_Game_ClearTimer(lua_State* L)
     {
         int timerId = (int)luaL_checkinteger(L, 1);
@@ -630,8 +1675,6 @@ namespace AMLua
         }
 
         Log("Showing Mod List in GTA SA Dialog:\n%s", text.c_str());
-
-        // Display in GTA SA's built-in top-right help dialog box
         DisplayHelpBox(text.c_str(), 6000);
     }
 
@@ -642,7 +1685,6 @@ namespace AMLua
     }
 
     // Game.DoFile(path) / AMLua.DoFile(path)
-    // Allows calling/executing Lua scripts repeatedly from inside Lua scripts
     static int Lua_Game_DoFile(lua_State* L)
     {
         const char* path = luaL_checkstring(L, 1);
@@ -665,7 +1707,7 @@ namespace AMLua
             const char* err = lua_tostring(L, -1);
             Log("[DoFile Error in %s]: %s", path, err ? err : "File not found or syntax error");
             CrashHandler::LogError("[DoFile Load Error in %s]: %s", path, err ? err : "File not found or syntax error");
-            lua_pop(L, 2); // pop error and errHandler
+            lua_pop(L, 2);
             lua_pushboolean(L, 0);
             return 1;
         }
@@ -679,7 +1721,7 @@ namespace AMLua
             const char* err = lua_tostring(L, -1);
             Log("[DoFile Execution Error in %s]: %s", path, err ? err : "Runtime error");
             CrashHandler::LogError("[DoFile Execution Error in %s]: %s", path, err ? err : "Runtime error");
-            lua_pop(L, 2); // pop error and errHandler
+            lua_pop(L, 2);
             lua_pushboolean(L, 0);
             return 1;
         }
@@ -689,7 +1731,6 @@ namespace AMLua
     }
 
     // Game.RunString(code) / AMLua.RunString(code)
-    // Evaluates a Lua code string dynamically
     static int Lua_Game_RunString(lua_State* L)
     {
         const char* code = luaL_checkstring(L, 1);
@@ -726,14 +1767,11 @@ namespace AMLua
         return lua_gettop(L) - (errHandler - 1);
     }
 
-    // Forward declaration of LoadScripts
     void LoadScripts(const char* scriptsDir);
 
     // Game.ReloadScripts() / AMLua.ReloadScripts()
-    // Reloads all Lua scripts on the fly
     static int Lua_ReloadScripts(lua_State* L)
     {
-        // Clear active timers and tick callbacks from previous session
         ClearAllTimers(L);
 
         lua_pushnil(L);
@@ -745,11 +1783,7 @@ namespace AMLua
         return 0;
     }
 
-    // Touch event gesture detection:
-    // 1. Double-tap in top-right area (near weapon/health HUD)
-    // 2. Double-tap on top status bar
-    // 3. Swipe down from top (classic CLEO swipe)
-    // 4. Two-finger tap
+    // Touch event gesture detection
     void OnTouchEvent(int actionType, int trackNum, int x, int y)
     {
         static int s_MaxX = 1280;
@@ -773,19 +1807,15 @@ namespace AMLua
             double elapsedMs = (double)(curClock - lastTapClock) * 1000.0 / CLOCKS_PER_SEC;
             lastTapClock = curClock;
 
-            // Check if touch is near top-right corner (where weapon/health HUD is)
             bool isTopRight = (x > (int)(s_MaxX * 0.55f) && y < (int)(s_MaxY * 0.40f));
-            // Or top status bar
             bool isTopBar = (y < (int)(s_MaxY * 0.25f));
 
             if ((isTopRight || isTopBar) && elapsedMs < 650.0 && elapsedMs > 40.0)
             {
-                // Double tap detected!
                 ShowScriptListDialog();
                 return;
             }
 
-            // Two-finger tap
             if (trackNum >= 1)
             {
                 static clock_t lastTwoFingerClock = 0;
@@ -800,7 +1830,6 @@ namespace AMLua
         }
         else if (actionType == 2) // UP
         {
-            // Swipe down from top (start y < 30% height, swipe down > 18% height, vertical)
             clock_t curClock = clock();
             double swipeDuration = (double)(curClock - startTime) * 1000.0 / CLOCKS_PER_SEC;
             int dx = abs(x - startX);
@@ -816,7 +1845,6 @@ namespace AMLua
     // Sandboxing: disable dangerous os / io / package capabilities
     static void ApplySandbox(lua_State* L)
     {
-        // 1. os.execute, os.remove, os.rename
         lua_getglobal(L, "os");
         if (lua_istable(L, -1))
         {
@@ -829,7 +1857,6 @@ namespace AMLua
         }
         lua_pop(L, 1);
 
-        // 2. package.loadlib
         lua_getglobal(L, "package");
         if (lua_istable(L, -1))
         {
@@ -838,7 +1865,6 @@ namespace AMLua
         }
         lua_pop(L, 1);
 
-        // 3. io.popen
         lua_getglobal(L, "io");
         if (lua_istable(L, -1))
         {
@@ -865,17 +1891,83 @@ namespace AMLua
         lua_setfield(L, -2, "SetArmour");
         lua_pushcfunction(L, Lua_Player_GetArmour);
         lua_setfield(L, -2, "GetArmour");
+        lua_pushcfunction(L, Lua_Player_GetPosition);
+        lua_setfield(L, -2, "GetPosition");
+        lua_pushcfunction(L, Lua_Player_SetPosition);
+        lua_setfield(L, -2, "SetPosition");
+        lua_pushcfunction(L, Lua_Player_SetPosition);
+        lua_setfield(L, -2, "Teleport");
+        lua_pushcfunction(L, Lua_Player_GetVehicle);
+        lua_setfield(L, -2, "GetVehicle");
+        lua_pushcfunction(L, Lua_Player_IsInVehicle);
+        lua_setfield(L, -2, "IsInVehicle");
+        lua_pushcfunction(L, Lua_Player_GetHeading);
+        lua_setfield(L, -2, "GetHeading");
+        lua_pushcfunction(L, Lua_Player_SetHeading);
+        lua_setfield(L, -2, "SetHeading");
+        lua_pushcfunction(L, Lua_Player_GetWantedLevel);
+        lua_setfield(L, -2, "GetWantedLevel");
+        lua_pushcfunction(L, Lua_Player_SetWantedLevel);
+        lua_setfield(L, -2, "SetWantedLevel");
+        lua_pushcfunction(L, Lua_Player_ClearWantedLevel);
+        lua_setfield(L, -2, "ClearWantedLevel");
+        lua_pushcfunction(L, Lua_Player_GetMoney);
+        lua_setfield(L, -2, "GetMoney");
+        lua_pushcfunction(L, Lua_Player_SetMoney);
+        lua_setfield(L, -2, "SetMoney");
+        lua_pushcfunction(L, Lua_Player_GiveMoney);
+        lua_setfield(L, -2, "GiveMoney");
         lua_setglobal(L, "Player");
 
         // Table: Vehicle
         lua_newtable(L);
+        lua_pushcfunction(L, Lua_Vehicle_GetPlayerVehicle);
+        lua_setfield(L, -2, "GetPlayerVehicle");
+        lua_pushcfunction(L, Lua_Vehicle_GetPosition);
+        lua_setfield(L, -2, "GetPosition");
+        lua_pushcfunction(L, Lua_Vehicle_SetPosition);
+        lua_setfield(L, -2, "SetPosition");
+        lua_pushcfunction(L, Lua_Vehicle_SetPosition);
+        lua_setfield(L, -2, "Teleport");
+        lua_pushcfunction(L, Lua_Vehicle_GetVelocity);
+        lua_setfield(L, -2, "GetVelocity");
+        lua_pushcfunction(L, Lua_Vehicle_SetVelocity);
+        lua_setfield(L, -2, "SetVelocity");
+        lua_pushcfunction(L, Lua_Vehicle_GetSpeed);
+        lua_setfield(L, -2, "GetSpeed");
+        lua_pushcfunction(L, Lua_Vehicle_SetSpeed);
+        lua_setfield(L, -2, "SetSpeed");
         lua_pushcfunction(L, Lua_Vehicle_Repair);
         lua_setfield(L, -2, "Repair");
         lua_pushcfunction(L, Lua_Vehicle_GetHealth);
         lua_setfield(L, -2, "GetHealth");
         lua_pushcfunction(L, Lua_Vehicle_SetHealth);
         lua_setfield(L, -2, "SetHealth");
+        lua_pushcfunction(L, Lua_Vehicle_BlowUp);
+        lua_setfield(L, -2, "BlowUp");
+        lua_pushcfunction(L, Lua_Vehicle_BlowUp);
+        lua_setfield(L, -2, "Explode");
+        lua_pushcfunction(L, Lua_Vehicle_SetDoorLock);
+        lua_setfield(L, -2, "SetDoorLock");
+        lua_pushcfunction(L, Lua_Vehicle_SetLocked);
+        lua_setfield(L, -2, "SetLocked");
+        lua_pushcfunction(L, Lua_Vehicle_IsLocked);
+        lua_setfield(L, -2, "IsLocked");
+        lua_pushcfunction(L, Lua_Vehicle_GetHeading);
+        lua_setfield(L, -2, "GetHeading");
+        lua_pushcfunction(L, Lua_Vehicle_SetHeading);
+        lua_setfield(L, -2, "SetHeading");
         lua_setglobal(L, "Vehicle");
+
+        // Table: Explosion
+        lua_newtable(L);
+        lua_pushcfunction(L, Lua_Explosion_Create);
+        lua_setfield(L, -2, "Create");
+        lua_pushcfunction(L, Lua_Explosion_CreateAtPlayer);
+        lua_setfield(L, -2, "CreateAtPlayer");
+        lua_pushcfunction(L, Lua_Explosion_CreateAtVehicle);
+        lua_setfield(L, -2, "CreateAtVehicle");
+        lua_setglobal(L, "Explosion");
 
         // Table: Game
         lua_newtable(L);
@@ -888,7 +1980,7 @@ namespace AMLua
         lua_pushcfunction(L, Lua_RegisterTick);
         lua_setfield(L, -2, "OnTick");
 
-        // Seconds-based real-time timers
+        // Timers in Game
         lua_pushcfunction(L, Lua_Game_SetInterval);
         lua_setfield(L, -2, "SetInterval");
         lua_pushcfunction(L, Lua_Game_SetInterval);
@@ -904,6 +1996,7 @@ namespace AMLua
         lua_pushcfunction(L, Lua_Game_ClearTimer);
         lua_setfield(L, -2, "ClearTimeout");
 
+        // Script management in Game
         lua_pushcfunction(L, Lua_GetLoadedScripts);
         lua_setfield(L, -2, "GetLoadedScripts");
         lua_pushcfunction(L, Lua_ShowScriptList);
@@ -914,9 +2007,45 @@ namespace AMLua
         lua_setfield(L, -2, "RunString");
         lua_pushcfunction(L, Lua_ReloadScripts);
         lua_setfield(L, -2, "ReloadScripts");
+
+        // World & Teleportation
+        lua_pushcfunction(L, Lua_Game_Teleport);
+        lua_setfield(L, -2, "Teleport");
+        lua_pushcfunction(L, Lua_Game_GetGroundZ);
+        lua_setfield(L, -2, "GetGroundZ");
+
+        // Clock & Weather & TimeScale
+        lua_pushcfunction(L, Lua_Game_SetTime);
+        lua_setfield(L, -2, "SetTime");
+        lua_pushcfunction(L, Lua_Game_SetTime);
+        lua_setfield(L, -2, "SetClock");
+        lua_pushcfunction(L, Lua_Game_GetTime);
+        lua_setfield(L, -2, "GetTime");
+        lua_pushcfunction(L, Lua_Game_GetTime);
+        lua_setfield(L, -2, "GetClock");
+        lua_pushcfunction(L, Lua_Game_SetWeather);
+        lua_setfield(L, -2, "SetWeather");
+        lua_pushcfunction(L, Lua_Game_ReleaseWeather);
+        lua_setfield(L, -2, "ReleaseWeather");
+        lua_pushcfunction(L, Lua_Game_SetGameSpeed);
+        lua_setfield(L, -2, "SetGameSpeed");
+        lua_pushcfunction(L, Lua_Game_SetGameSpeed);
+        lua_setfield(L, -2, "SetTimeScale");
+        lua_pushcfunction(L, Lua_Game_GetGameSpeed);
+        lua_setfield(L, -2, "GetGameSpeed");
+        lua_pushcfunction(L, Lua_Game_GetGameSpeed);
+        lua_setfield(L, -2, "GetTimeScale");
+        lua_pushcfunction(L, Lua_Game_GetFPS);
+        lua_setfield(L, -2, "GetFPS");
+
+        // Explosion alias in Game
+        lua_pushcfunction(L, Lua_Explosion_Create);
+        lua_setfield(L, -2, "CreateExplosion");
+        lua_pushcfunction(L, Lua_Explosion_Create);
+        lua_setfield(L, -2, "Explode");
         lua_setglobal(L, "Game");
 
-        // Table: Timer (Dedicated easy timer namespace)
+        // Table: Timer
         lua_newtable(L);
         lua_pushcfunction(L, Lua_Game_SetInterval);
         lua_setfield(L, -2, "SetInterval");
@@ -934,14 +2063,14 @@ namespace AMLua
         lua_setfield(L, -2, "ClearTimeout");
         lua_setglobal(L, "Timer");
 
-        // Table: AMLua (contains version, mod list inspection, and direct module references)
+        // Table: AMLua
         lua_newtable(L);
-        lua_pushstring(L, "1.0.5");
+        lua_pushstring(L, "1.0.6");
         lua_setfield(L, -2, "Version");
         lua_pushcfunction(L, Lua_RegisterTick);
         lua_setfield(L, -2, "OnTick");
 
-        // Seconds-based real-time timers
+        // Timers in AMLua
         lua_pushcfunction(L, Lua_Game_SetInterval);
         lua_setfield(L, -2, "SetInterval");
         lua_pushcfunction(L, Lua_Game_SetInterval);
@@ -957,6 +2086,7 @@ namespace AMLua
         lua_pushcfunction(L, Lua_Game_ClearTimer);
         lua_setfield(L, -2, "ClearTimeout");
 
+        // Game methods in AMLua
         lua_pushcfunction(L, Lua_GetLoadedScripts);
         lua_setfield(L, -2, "GetLoadedScripts");
         lua_pushcfunction(L, Lua_ShowScriptList);
@@ -971,12 +2101,16 @@ namespace AMLua
         lua_setfield(L, -2, "RunString");
         lua_pushcfunction(L, Lua_ReloadScripts);
         lua_setfield(L, -2, "ReloadScripts");
+        lua_pushcfunction(L, Lua_Game_Teleport);
+        lua_setfield(L, -2, "Teleport");
 
-        // Reference Player, Vehicle, Game, Timer inside AMLua as well
+        // Submodules in AMLua
         lua_getglobal(L, "Player");
         lua_setfield(L, -2, "Player");
         lua_getglobal(L, "Vehicle");
         lua_setfield(L, -2, "Vehicle");
+        lua_getglobal(L, "Explosion");
+        lua_setfield(L, -2, "Explosion");
         lua_getglobal(L, "Game");
         lua_setfield(L, -2, "Game");
         lua_getglobal(L, "Timer");
@@ -984,11 +2118,11 @@ namespace AMLua
 
         lua_setglobal(L, "AMLua");
 
-        // Global dofile override so scripts can call dofile("myscript.lua") directly
+        // Global dofile override
         lua_pushcfunction(L, Lua_Game_DoFile);
         lua_setglobal(L, "dofile");
 
-        // Global timer aliases for standard JavaScript / browser / game familiarity
+        // Global timer aliases
         lua_pushcfunction(L, Lua_Game_SetInterval);
         lua_setglobal(L, "setInterval");
         lua_pushcfunction(L, Lua_Game_SetTimeout);
@@ -1018,7 +2152,7 @@ namespace AMLua
         }
 
         Log("=========================================");
-        Log("AMLua: Android Mod Lua Script Loader 1.0");
+        Log("AMLua: Android Mod Lua Script Loader 1.0.6");
         Log("Target: libGTASA.so (base: %p, size: %zu)", (void*)g_pGTASA, (size_t)g_LibGTASASize);
         Log("Log target: %s", g_LogFilePath.c_str());
         Log("Scripts dir: %s", g_ScriptsDirPath.c_str());
@@ -1027,17 +2161,34 @@ namespace AMLua
         // Resolve game engine symbols via AML
         if (aml && g_pGTASA)
         {
-            // FindPlayerPed: _Z13FindPlayerPedi or FindPlayerPed
+            // 1. FindPlayerPed
             pfnFindPlayerPed = (FindPlayerPed_t)aml->GetSym(g_pGTASA, "_Z13FindPlayerPedi");
             if (!pfnFindPlayerPed) pfnFindPlayerPed = (FindPlayerPed_t)aml->GetSym(g_pGTASA, "FindPlayerPed");
             Log("Symbol FindPlayerPed: %p", (void*)pfnFindPlayerPed);
 
-            // AsciiToGxtChar: _Z14AsciiToGxtCharPKcPt
+            // 2. FindPlayerVehicle
+            pfnFindPlayerVehicle = (FindPlayerVehicle_t)aml->GetSym(g_pGTASA, "_Z17FindPlayerVehicleib");
+            if (!pfnFindPlayerVehicle) pfnFindPlayerVehicle = (FindPlayerVehicle_t)aml->GetSym(g_pGTASA, "FindPlayerVehicle");
+            Log("Symbol FindPlayerVehicle: %p", (void*)pfnFindPlayerVehicle);
+
+            // 3. FindPlayerWanted
+            pfnFindPlayerWanted = (FindPlayerWanted_t)aml->GetSym(g_pGTASA, "_Z16FindPlayerWantedi");
+            if (!pfnFindPlayerWanted) pfnFindPlayerWanted = (FindPlayerWanted_t)aml->GetSym(g_pGTASA, "FindPlayerWanted");
+            Log("Symbol FindPlayerWanted: %p", (void*)pfnFindPlayerWanted);
+
+            // 4. SetWantedLevel
+            pfnSetWantedLevel = (SetWantedLevel_t)aml->GetSym(g_pGTASA, "_ZN7CWanted14SetWantedLevelEi");
+            pfnSetWantedLevelNoDrop = (SetWantedLevelNoDrop_t)aml->GetSym(g_pGTASA, "_ZN7CWanted20SetWantedLevelNoDropEi");
+            pfnGetWantedLevel = (GetWantedLevel_t)aml->GetSym(g_pGTASA, "_ZN7CWanted14GetWantedLevelEv");
+            if (!pfnGetWantedLevel) pfnGetWantedLevel = (GetWantedLevel_t)aml->GetSym(g_pGTASA, "_ZNK7CWanted14GetWantedLevelEv");
+            Log("Symbol CWanted::SetWantedLevel: %p", (void*)(pfnSetWantedLevel ? (void*)pfnSetWantedLevel : (void*)pfnSetWantedLevelNoDrop));
+
+            // 5. AsciiToGxtChar
             pfnAsciiToGxtChar = (AsciiToGxtChar_t)aml->GetSym(g_pGTASA, "_Z14AsciiToGxtCharPKcPt");
             if (!pfnAsciiToGxtChar) pfnAsciiToGxtChar = (AsciiToGxtChar_t)aml->GetSym(g_pGTASA, "AsciiToGxtChar");
             Log("Symbol AsciiToGxtChar: %p", (void*)pfnAsciiToGxtChar);
 
-            // CHud::SetHelpMessage (GTA SA native top-right dialog box)
+            // 6. CHud::SetHelpMessage
             pfnSetHelpMessage6 = (SetHelpMessage6_t)aml->GetSym(g_pGTASA, "_ZN4CHud14SetHelpMessageEPKcPtbbbj");
             if (!pfnSetHelpMessage6)
             {
@@ -1049,15 +2200,84 @@ namespace AMLua
             }
             Log("Symbol CHud::SetHelpMessage: %p", (void*)(pfnSetHelpMessage6 ? (void*)pfnSetHelpMessage6 : (pfnSetHelpMessage5 ? (void*)pfnSetHelpMessage5 : (void*)pfnSetHelpMessage4)));
 
-            // CMessages::AddMessageJumpQ (fallback)
+            // 7. CMessages::AddMessageJumpQ
             pfnAddMessageJumpQ = (AddMessageJumpQ_t)aml->GetSym(g_pGTASA, "_ZN9CMessages15AddMessageJumpQEPKcPtjtb");
             if (!pfnAddMessageJumpQ) pfnAddMessageJumpQ = (AddMessageJumpQ_t)aml->GetSym(g_pGTASA, "_ZN9CMessages15AddMessageJumpQEPKcjtb");
             Log("Symbol CMessages::AddMessageJumpQ: %p", (void*)pfnAddMessageJumpQ);
 
-            // CVehicle::Fix
+            // 8. CVehicle::Fix & BlowUpCar
             pfnVehicleFix = (VehicleFix_t)aml->GetSym(g_pGTASA, "_ZN8CVehicle3FixEv");
             if (!pfnVehicleFix) pfnVehicleFix = (VehicleFix_t)aml->GetSym(g_pGTASA, "_ZN8CVehicle6RepairEv");
             Log("Symbol CVehicle::Fix: %p", (void*)pfnVehicleFix);
+
+            pfnVehicleBlowUp = (VehicleBlowUp_t)aml->GetSym(g_pGTASA, "_ZN8CVehicle9BlowUpCarEP7CEntityh");
+            if (!pfnVehicleBlowUp) pfnVehicleBlowUp = (VehicleBlowUp_t)aml->GetSym(g_pGTASA, "_ZN8CVehicle9BlowUpCarEP7CEntity");
+            Log("Symbol CVehicle::BlowUpCar: %p", (void*)pfnVehicleBlowUp);
+
+            // 9. CEntity::Teleport
+            pfnEntityTeleport = (EntityTeleport_t)aml->GetSym(g_pGTASA, "_ZN7CEntity8TeleportE7CVectorb");
+            if (!pfnEntityTeleport) pfnEntityTeleport = (EntityTeleport_t)aml->GetSym(g_pGTASA, "_ZN7CEntity8TeleportE7CVector");
+            Log("Symbol CEntity::Teleport: %p", (void*)pfnEntityTeleport);
+
+            // 10. CExplosion::AddExplosion & CWorld::TriggerExplosion
+            pfnAddExplosion = (AddExplosion_t)aml->GetSym(g_pGTASA, "_ZN10CExplosion12AddExplosionEP7CEntityS1_14eExplosionTypeRK7CVectorjbfb");
+            if (!pfnAddExplosion) pfnAddExplosion = (AddExplosion_t)aml->GetSym(g_pGTASA, "_ZN10CExplosion12AddExplosionEP7CEntityS1_14eExplosionTypeRK7CVectorjbf");
+            if (!pfnAddExplosion) pfnAddExplosion = (AddExplosion_t)aml->GetSym(g_pGTASA, "_ZN10CExplosion12AddExplosionEP7CEntityS1_iRK7CVectorjbfb");
+            if (!pfnAddExplosion) pfnAddExplosion = (AddExplosion_t)aml->GetSym(g_pGTASA, "_ZN10CExplosion12AddExplosionEP7CEntityS1_iRK7CVectorjbf");
+            #ifdef AML32
+            if (!pfnAddExplosion && g_pGTASA) pfnAddExplosion = (AddExplosion_t)(g_pGTASA + 0x5A70D0);
+            #endif
+            Log("Symbol CExplosion::AddExplosion: %p", (void*)pfnAddExplosion);
+
+            pfnTriggerExplosion = (TriggerExplosion_t)aml->GetSym(g_pGTASA, "_ZN6CWorld16TriggerExplosionERK7CVectorffP7CEntityS4_bf");
+            Log("Symbol CWorld::TriggerExplosion: %p", (void*)pfnTriggerExplosion);
+
+            // 11. FindGroundZ
+            pfnFindGroundZForCoord = (FindGroundZForCoord_t)aml->GetSym(g_pGTASA, "_ZN6CWorld19FindGroundZForCoordEff");
+            pfnFindGroundZFor3DCoord = (FindGroundZFor3DCoord_t)aml->GetSym(g_pGTASA, "_ZN6CWorld21FindGroundZFor3DCoordEfffPbPP7CEntity");
+            Log("Symbol FindGroundZForCoord: %p", (void*)pfnFindGroundZForCoord);
+
+            // 12. Clock
+            pfnSetGameClock = (SetGameClock_t)aml->GetSym(g_pGTASA, "_ZN6CClock12SetGameClockEhhh");
+            pClockHours = (unsigned char*)aml->GetSym(g_pGTASA, "_ZN6CClock18ms_nGameClockHoursE");
+            if (!pClockHours) pClockHours = (unsigned char*)aml->GetSym(g_pGTASA, "_ZN6CClock16ms_nGameClockHoursE");
+            pClockMinutes = (unsigned char*)aml->GetSym(g_pGTASA, "_ZN6CClock20ms_nGameClockMinutesE");
+            if (!pClockMinutes) pClockMinutes = (unsigned char*)aml->GetSym(g_pGTASA, "_ZN6CClock18ms_nGameClockMinutesE");
+            #ifdef AML32
+            if (!pClockHours) pClockHours = (unsigned char*)(g_pGTASA + 0x679B40);
+            if (!pClockMinutes) pClockMinutes = (unsigned char*)(g_pGTASA + 0x676270);
+            #else
+            if (!pClockHours) pClockHours = (unsigned char*)(g_pGTASA + 0x8516A0);
+            if (!pClockMinutes) pClockMinutes = (unsigned char*)(g_pGTASA + 0x84A540);
+            #endif
+            Log("Symbol CClock::SetGameClock: %p", (void*)pfnSetGameClock);
+
+            // 13. Weather
+            pfnForceWeatherNow = (ForceWeatherNow_t)aml->GetSym(g_pGTASA, "_ZN8CWeather15ForceWeatherNowEs");
+            pfnForceWeather = (ForceWeather_t)aml->GetSym(g_pGTASA, "_ZN8CWeather12ForceWeatherEs");
+            pfnReleaseWeather = (ReleaseWeather_t)aml->GetSym(g_pGTASA, "_ZN8CWeather14ReleaseWeatherEv");
+            Log("Symbol CWeather::ForceWeatherNow: %p", (void*)pfnForceWeatherNow);
+
+            // 14. Timer (TimeScale / FPS)
+            pTimeScale = (float*)aml->GetSym(g_pGTASA, "_ZN6CTimer13ms_fTimeScaleE");
+            pGameFPS = (float*)aml->GetSym(g_pGTASA, "_ZN6CTimer8game_FPSE");
+            #ifdef AML32
+            if (!pTimeScale) pTimeScale = (float*)(g_pGTASA + 0x6768A8);
+            if (!pGameFPS) pGameFPS = (float*)(g_pGTASA + 0x67767C);
+            #else
+            if (!pTimeScale) pTimeScale = (float*)(g_pGTASA + 0x84B1A8);
+            if (!pGameFPS) pGameFPS = (float*)(g_pGTASA + 0x84CD28);
+            #endif
+            Log("Symbol CTimer::ms_fTimeScale: %p", (void*)pTimeScale);
+
+            // 15. CWorld::Players (Money)
+            pWorldPlayers = (void*)aml->GetSym(g_pGTASA, "_ZN6CWorld7PlayersE");
+            #ifdef AML32
+            if (!pWorldPlayers) pWorldPlayers = (void*)(g_pGTASA + 0x6783C8);
+            #else
+            if (!pWorldPlayers) pWorldPlayers = (void*)(g_pGTASA + 0x84E7A8);
+            #endif
+            Log("Symbol CWorld::Players: %p", pWorldPlayers);
         }
 
         // Initialize Lua VM
@@ -1120,7 +2340,6 @@ namespace AMLua
 
         Log("Scanning for scripts in: %s", scriptsDir);
 
-        // Ensure directory exists
         mkdir(scriptsDir, 0777);
 
         DIR* dir = opendir(scriptsDir);
@@ -1143,7 +2362,6 @@ namespace AMLua
         }
         closedir(dir);
 
-        // Sort files alphabetically for deterministic loading
         std::sort(g_LoadedScripts.begin(), g_LoadedScripts.end());
 
         Log("Found %zu Lua script(s) to load.", g_LoadedScripts.size());
@@ -1157,7 +2375,6 @@ namespace AMLua
             CrashHandler::SetCurrentScript(fileName.c_str());
             CrashHandler::SetCurrentAction("Script Execution (Startup)");
 
-            // Push traceback error handler
             lua_pushcfunction(g_LuaState, Lua_TracebackHandler);
             int errHandler = lua_gettop(g_LuaState);
 
@@ -1293,7 +2510,6 @@ namespace AMLua
                     lua_rawgeti(g_LuaState, LUA_REGISTRYINDEX, trig.luaFuncRef);
                     if (lua_isfunction(g_LuaState, -1))
                     {
-                        // Pass dt (seconds) to timer callback as parameter
                         lua_pushnumber(g_LuaState, (lua_Number)dt);
 
                         if (lua_pcall(g_LuaState, 1, 0, errH) != LUA_OK)
@@ -1351,7 +2567,6 @@ namespace AMLua
                     snprintf(actBuf, sizeof(actBuf), "Tick Callback #%d", i);
                     CrashHandler::SetCurrentAction(actBuf);
 
-                    // Pass delta time 'dt' (real seconds elapsed) to callback
                     lua_pushnumber(g_LuaState, (lua_Number)dt);
 
                     if (lua_pcall(g_LuaState, 1, 0, errHandler) != LUA_OK)

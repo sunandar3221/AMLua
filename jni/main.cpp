@@ -4,7 +4,7 @@
 #include <string>
 
 // AML Plugin Metadata
-MYMOD(net.amlua.loader, AMLua, "1.0.5", "sunandar3221")
+MYMOD(net.amlua.loader, AMLua, "1.0.6", "sunandar3221")
 NEEDGAME(com.rockstargames.gtasa)
 
 uintptr_t g_pLibGTASA = 0;
@@ -37,7 +37,7 @@ extern "C" JNIEXPORT void OnModLoad()
 {
     logger->SetTag("AMLua");
     logger->Info("==========================================");
-    logger->Info("AMLua: Android Mod Lua Script Loader 1.0.5");
+    logger->Info("AMLua: Android Mod Lua Script Loader 1.0.6");
     logger->Info("Initializing plugin for GTA San Andreas");
     logger->Info("==========================================");
 
@@ -103,7 +103,7 @@ extern "C" JNIEXPORT void OnModLoad()
     }
 
     AMLua::LoadScripts(scriptsDir.c_str());
-    logger->Info("AMLua 1.0.5 initialized and ready.");
+    logger->Info("AMLua 1.0.6 initialized and ready.");
 }
 
 extern "C" JNIEXPORT void OnModUnload()
