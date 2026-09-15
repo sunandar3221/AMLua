@@ -5,7 +5,7 @@
 [![Platform](https://img.shields.io/badge/Platform-Android-green.svg)](https://android.com)
 [![Architecture](https://img.shields.io/badge/Arch-arm64--v8a%20%7C%20armeabi--v7a-orange.svg)](#)
 [![Lua Version](https://img.shields.io/badge/Lua-5.4.6-blue.svg)](https://www.lua.org)
-[![Version](https://img.shields.io/badge/Version-1.0.9-brightgreen.svg)](#)
+[![Version](https://img.shields.io/badge/Version-1.1.0-brightgreen.svg)](#)
 
 **AMLua (Android Mod Lua)** adalah plugin shared library resmi berbasis **Android Mod Loader (AML)** yang dirancang untuk memuat, mengelola, dan mengeksekusi script **Lua** secara dinamis langsung di dalam game **Grand Theft Auto: San Andreas** (Android).
 
@@ -27,23 +27,21 @@ Dengan AMLua, para modder tidak perlu lagi melakukan re-kompilasi kode C/C++ yan
    - [Log Error Runtime Lua (amlua_error.log)](#2-log-error-runtime-lua-amlua_errorlog)
    - [Log Eksekusi Normal (amlua.log)](#3-log-eksekusi-normal-amlualog)
 3. [Dokumentasi Lengkap API AMLua](#-dokumentasi-lengkap-api-amlua)
-   - [Modul Explosion (Ledakan)](#1-modul-explosion-ledakan)
-   - [Modul Player (Karakter Pemain)](#2-modul-player-karakter-pemain)
-   - [Modul Vehicle (Manipulasi Kendaraan)](#3-modul-vehicle-manipulasi-kendaraan)
-   - [Modul Game (Manipulasi Dunia & Lingkungan)](#4-modul-game-manipulasi-dunia--lingkungan)
-   - [Modul Timer (Alternatif Mudah Berbasis Detik)](#5-modul-timer-alternatif-mudah-berbasis-detik)
-   - [Modul AMLua & Global](#6-modul-amlua--global)
-   - [Daftar Kode Warna & Format Dialog GTA SA](#7-daftar-kode-warna--format-dialog-gta-sa)
+   - [Modul Http (Koneksi Internet & REST API)](#1-modul-http-koneksi-internet--rest-api)
+   - [Modul Json (Parser & Serializer JSON)](#2-modul-json-parser--serializer-json)
+   - [Modul Weapon (Senjata & Amunisi)](#3-modul-weapon-senjata--amunisi)
+   - [Modul Device (Fitur Android: Getar, Toast, Baterai)](#4-modul-device-fitur-android-getar-toast-baterai)
+   - [Modul Audio (Efek Suara & Radio Mobil)](#5-modul-audio-efek-suara--radio-mobil)
+   - [Modul File (Membaca, Menulis & Menyimpan File)](#6-modul-file-membaca-menulis--menyimpan-file)
+   - [Modul Screen & Camera (Fade Layar & Goyang Kamera)](#7-modul-screen--camera-fade-layar--goyang-kamera)
+   - [Modul Explosion (Ledakan)](#8-modul-explosion-ledakan)
+   - [Modul Player (Karakter Pemain)](#9-modul-player-karakter-pemain)
+   - [Modul Vehicle (Manipulasi & Spawn Kendaraan)](#10-modul-vehicle-manipulasi--spawn-kendaraan)
+   - [Modul Game (Manipulasi Dunia & Lingkungan)](#11-modul-game-manipulasi-dunia--lingkungan)
+   - [Modul Timer (Alternatif Mudah Berbasis Detik)](#12-modul-timer-alternatif-mudah-berbasis-detik)
+   - [Modul AMLua & Global](#13-modul-amlua--global)
+   - [Daftar Kode Warna & Format Dialog GTA SA](#14-daftar-kode-warna--format-dialog-gta-sa)
 4. [Belajar Kilat AMLua Sampai Bisa (Tutorial Lengkap dari Nol)](#-belajar-kilat-amlua-sampai-bisa-tutorial-lengkap-dari-nol)
-   - [Pelajaran 1: Struktur Folder & File Script](#pelajaran-1-struktur-folder--file-script)
-   - [Pelajaran 2: Hello World (Script Pertama Anda)](#pelajaran-2-hello-world-script-pertama-anda)
-   - [Pelajaran 3: Memahami Timer Detik (Game.Every & Game.After)](#pelajaran-3-memahami-timer-detik-gameevery--gameafter)
-   - [Pelajaran 4: Mod Ledakan (Membuat Ledakan Terarah)](#pelajaran-4-mod-ledakan-membuat-ledakan-terarah)
-   - [Pelajaran 5: Mod Speedometer & Nitro Boost Kendaraan](#pelajaran-5-mod-speedometer--nitro-boost-kendaraan)
-   - [Pelajaran 6: Mod Teleportasi Aman dengan Ground Snapping](#pelajaran-6-mod-teleportasi-aman-dengan-ground-snapping)
-   - [Pelajaran 7: Mod Cuaca, Jam Game & Bonus Uang](#pelajaran-7-mod-cuaca-jam-game--bonus-uang)
-   - [Pelajaran 8: Memanggil Script Lain Berkali-kali (Modular Modding)](#pelajaran-8-memanggil-script-lain-berkali-kali-modular-modding)
-   - [Pelajaran 9: Debugging & Membaca Error Log](#pelajaran-9-debugging--membaca-error-log)
 5. [In-Game Mod List Viewer (Melihat Daftar Mod Aktif)](#-in-game-mod-list-viewer)
 6. [Panduan Pemasangan di HP Android](#-panduan-pemasangan-di-hp-android)
 7. [Kompilasi / Build dari Source Code](#-kompilasi--build-dari-source-code)
@@ -151,7 +149,140 @@ Semua fungsi di bawah ini dapat diakses secara global di dalam script Lua Anda.
 
 ---
 
-### 1. Modul `Explosion` (Ledakan)
+### 1. Modul `Http` (Koneksi Internet & REST API)
+> 🚀 **Baru di v1.1.0!** Modul untuk menghubungkan game GTA San Andreas ke internet secara real-time! Mendukung protokol HTTP dan HTTPS native dengan verifikasi SSL sistem Android, asynchronous callback non-blocking (tidak membuat game freeze/lag), JSON REST API, webhook, dan download file langsung.
+
+| Fungsi | Parameter | Nilai Balik | Deskripsi |
+| :--- | :--- | :--- | :--- |
+| `Http.Get(url, [headers], callback)` | `url` (string), `[headers]` (table, opsional), `callback(response)` (fn) | *(tidak ada)* | Mengirim HTTP/HTTPS GET request secara asinkron (latar belakang). Saat selesai, callback dieksekusi di game loop dengan tabel response. |
+| `Http.Post(url, body, [headers], callback)` | `url` (string), `body` (string), `[headers]` (table, opsional), `callback(response)` (fn) | *(tidak ada)* | Mengirim HTTP/HTTPS POST request secara asinkron dengan payload string/JSON. |
+| `Http.Request(options, callback)` | `options` (`{ url, method, body, headers, timeout }`), `callback(response)` | *(tidak ada)* | Format request fleksibel untuk method GET, POST, PUT, DELETE, PATCH, atau HEAD. |
+| `Http.GetSync(url, [headers], [timeoutMs])` | `url` (string), `[headers]` (table, opsional), `[timeoutMs]` (int, default 10000) | `table` (response) | Mengirim GET request secara sinkron (blocking). |
+| `Http.PostSync(url, body, [headers], [timeoutMs])` | `url`, `body`, `[headers]`, `[timeoutMs]` | `table` (response) | Mengirim POST request secara sinkron (blocking). |
+| `Http.Download(url, destPath, callback)` | `url` (string), `destPath` (string), `callback(ok, err)` (fn) | *(tidak ada)* | Mengunduh file dari internet langsung disimpan ke direktori file perangkat (misal file audio, texture, atau mod) secara asinkron. |
+| `Http.DownloadSync(url, destPath)` | `url` (string), `destPath` (string) | `boolean, [err]` | Mengunduh file secara langsung (sinkron). |
+
+> **Format Struktur Tabel `response`:**
+> ```lua
+> {
+>     ok = true,          -- boolean: true jika status code 200..399
+>     status = 200,       -- integer: kode status HTTP (200, 404, 500, dll.)
+>     body = "...",       -- string: isi konten respon dari server
+>     headers = { ... },  -- table: header respon HTTP
+>     error = nil         -- string/nil: pesan error jika gagal koneksi / DNS / timeout
+> }
+> ```
+
+#### Contoh Penggunaan `Http`:
+```lua
+-- Mengambil data dari REST API publik secara asinkron
+Http.Get("https://httpbin.org/get", function(res)
+    if res.ok then
+        local data = Json.Decode(res.body)
+        Game.PrintText("~g~Koneksi Internet Berhasil!~n~~w~IP: " .. tostring(data.origin), 4000)
+    else
+        Game.Log("Gagal koneksi internet: " .. tostring(res.error))
+    end
+end)
+```
+
+---
+
+### 2. Modul `Json` (Parser & Serializer JSON)
+> 🚀 **Baru di v1.1.0!** Parser dan serializer JSON berkecepatan tinggi, zero-dependency, dan aman untuk mengolah data web REST API atau konfigurasi file `.json`.
+
+| Fungsi | Parameter | Nilai Balik | Deskripsi |
+| :--- | :--- | :--- | :--- |
+| `Json.Decode(jsonStr)` | `jsonStr` (string JSON) | `table/val, [err]` | Mengubah string JSON menjadi tabel Lua. Alias: `Json.Parse`. |
+| `Json.Parse(jsonStr)` | `jsonStr` (string JSON) | `table/val, [err]` | Alias praktis untuk `Json.Decode`. |
+| `Json.Encode(value, [pretty])` | `value` (table/any), `[pretty]` (bool, opsional) | `string, [err]` | Mengubah tabel Lua menjadi string JSON. Jika `pretty = true`, format JSON akan rapi dengan indentasi. Alias: `Json.Stringify`. |
+| `Json.Stringify(value, [pretty])` | `value` (table/any), `[pretty]` (bool, opsional) | `string, [err]` | Alias praktis untuk `Json.Encode`. |
+
+#### Contoh Penggunaan `Json`:
+```lua
+local profile = { name = "CJ", money = 50000, weapons = { "AK47", "Minigun" } }
+local jsonText = Json.Encode(profile, true)
+Game.Log("JSON Data:\n" .. jsonText)
+
+local parsed = Json.Decode(jsonText)
+Game.PrintText("~y~Player: ~w~" .. parsed.name .. " | Saldo: $" .. parsed.money, 3000)
+```
+
+---
+
+### 3. Modul `Weapon` (Senjata & Amunisi)
+> 🚀 **Baru di v1.1.0!** Mengontrol persenjataan karakter pemain dan NPC secara lengkap.
+
+| Fungsi | Parameter | Nilai Balik | Deskripsi |
+| :--- | :--- | :--- | :--- |
+| `Weapon.Give([ped], weaponId, ammo)` | `[ped]` (pointer/handle, opsional), `weaponId` (int), `ammo` (int) | `boolean` | Memberikan senjata dan amunisi kepada karakter. Jika `ped` dikosongkan, otomatis diberikan ke pemain. |
+| `Weapon.SetCurrent([ped], weaponId)` | `[ped]` (opsional), `weaponId` (int) | `boolean` | Memaksa karakter untuk menggenggam/memilih senjata tertentu di tangannya. |
+| `Weapon.Remove([ped], weaponId)` | `[ped]` (opsional), `weaponId` (int) | `boolean` | Menghapus senjata tertentu dari inventaris karakter. |
+| `Weapon.RemoveAll([ped])` | `[ped]` (pointer/handle, opsional) | `boolean` | Menghapus seluruh senjata dari karakter (kosong melompong). |
+
+> **Konstanta Senjata Lengkap (`Weapon.*`):**
+> `Weapon.FIST` (0), `Weapon.BRASSKNUCKLE` (1), `Weapon.GOLFCLUB` (2), `Weapon.NIGHTSTICK` (3), `Weapon.KNIFE` (4), `Weapon.BASEBALLBAT` (5), `Weapon.SHOVEL` (6), `Weapon.POOLCUE` (7), `Weapon.KATANA` (8), `Weapon.CHAINSAW` (9), `Weapon.FLOWERS` (14), `Weapon.CANE` (15), `Weapon.GRENADE` (16), `Weapon.TEARGAS` (17), `Weapon.MOLOTOV` (18), `Weapon.PISTOL` (22), `Weapon.PISTOL_SILENCED` (23), `Weapon.DESERT_EAGLE` (24), `Weapon.SHOTGUN` (25), `Weapon.SAWNOFF` (26), `Weapon.SPAS12` (27), `Weapon.MICRO_UZI` (28), `Weapon.MP5` (29), `Weapon.AK47` (30), `Weapon.M4` (31), `Weapon.TEC9` (32), `Weapon.RIFLE` (33), `Weapon.SNIPER` (34), `Weapon.ROCKETLAUNCHER` (35), `Weapon.HEATSEEKER` (36), `Weapon.FLAMETHROWER` (37), `Weapon.MINIGUN` (38), `Weapon.SATCHEL` (39), `Weapon.DETONATOR` (40), `Weapon.SPRAYCAN` (41), `Weapon.EXTINGUISHER` (42), `Weapon.CAMERA` (43), `Weapon.NIGHTVISION` (44), `Weapon.THERMAL` (45), `Weapon.PARACHUTE` (46).
+
+---
+
+### 4. Modul `Device` (Fitur Android: Getar, Toast, Baterai)
+> 🚀 **Baru di v1.1.0!** Mengakses fitur hardware smartphone Android langsung dari script mod!
+
+| Fungsi | Parameter | Nilai Balik | Deskripsi |
+| :--- | :--- | :--- | :--- |
+| `Device.Vibrate([durationMs])` | `[durationMs]` (int ms, default 100) | `boolean` | Menggetarkan smartphone Android (haptic feedback). Cocok untuk efek tabrakan, tembakan, atau ledakan! |
+| `Device.CancelVibrate()` | *(tidak ada)* | `boolean` | Menghentikan getaran yang sedang berlangsung. |
+| `Device.Toast(message, [longer])` | `message` (string), `[longer]` (bool) | `boolean` | Menampilkan pesan notifikasi pop-up Android (*Android Native Toast*) di bagian bawah layar HP. |
+| `Device.GetBatteryLevel()` | *(tidak ada)* | `number` (float 0.0 - 100.0) | Mengambil sisa baterai smartphone saat ini dalam persen. |
+| `Device.GetAndroidVersion()` | *(tidak ada)* | `integer` | Mengambil versi API level Android perangkat (misal 30 untuk Android 11, 33 untuk Android 13). |
+| `Device.GetDisplaySize()` | *(tidak ada)* | `w, h` (2 integers) | Mengambil resolusi lebar dan tinggi layar smartphone. |
+
+---
+
+### 5. Modul `Audio` (Efek Suara & Radio Mobil)
+> 🚀 **Baru di v1.1.0!** Memutar sound effect game GTA dan mengatur stasiun radio kendaraan.
+
+| Fungsi | Parameter | Nilai Balik | Deskripsi |
+| :--- | :--- | :--- | :--- |
+| `Audio.PlaySound(soundId, [x, y, z])` | `soundId` (int), `[x, y, z]` (numbers, opsional) | `boolean` | Memutar sound effect game GTA SA. Jika koordinat diberikan, suara terdengar 3D dari posisi tersebut. |
+| `Audio.SetRadioStation(stationId)` | `stationId` (int 0 - 13) | `boolean` | Mengganti stasiun radio mobil yang sedang dinaiki. |
+| `Audio.GetRadioStation()` | *(tidak ada)* | `integer` | Mengambil ID stasiun radio kendaraan saat ini. |
+
+> **Konstanta Radio (`Audio.*`):**
+> `Audio.RADIO_OFF` (0), `Audio.RADIO_BOUNCE` (1), `Audio.RADIO_CSR` (2), `Audio.RADIO_K_ROSE` (3), `Audio.RADIO_K_DST` (4), `Audio.RADIO_BOUNCE_FM` (5), `Audio.RADIO_SF_UR` (6), `Audio.RADIO_LOS_SANTOS` (7), `Audio.RADIO_RADIO_X` (8), `Audio.RADIO_CSR_103_9` (9), `Audio.RADIO_K_JAH` (10), `Audio.RADIO_MASTER_SOUNDS` (11), `Audio.RADIO_WCTR` (12), `Audio.RADIO_USER_TRACKS` (13).
+
+---
+
+### 6. Modul `File` (Membaca, Menulis & Menyimpan File)
+> 🚀 **Baru di v1.1.0!** Sistem file I/O yang aman untuk menyimpan data save mod, high score, membaca file config, dll.
+
+| Fungsi | Parameter | Nilai Balik | Deskripsi |
+| :--- | :--- | :--- | :--- |
+| `File.Read(filePath)` | `filePath` (string) | `string` atau `nil, err` | Membaca seluruh isi file sebagai string. |
+| `File.Write(filePath, content)` | `filePath` (string), `content` (string) | `boolean, [err]` | Menulis/menimpa isi file dengan teks baru. |
+| `File.Append(filePath, content)` | `filePath` (string), `content` (string) | `boolean, [err]` | Menambahkan teks ke baris paling akhir file (append). |
+| `File.Exists(filePath)` | `filePath` (string) | `boolean` | Mengecek apakah file atau folder ada di penyimpanan. |
+| `File.Delete(filePath)` | `filePath` (string) | `boolean` | Menghapus file dari penyimpanan. |
+| `File.List(dirPath)` | `dirPath` (string) | `table` (array of strings) | Mengambil daftar nama file dan subfolder di direktori tertentu. |
+| `File.GetScriptsPath()` | *(tidak ada)* | `string` | Mengambil path folder scripts (`.../files/scripts`). |
+| `File.GetDataPath()` | *(tidak ada)* | `string` | Mengambil path folder data GTA SA (`.../files`). |
+
+---
+
+### 7. Modul `Screen` & `Camera` (Fade Layar & Goyang Kamera)
+> 🚀 **Baru di v1.1.0!** Mengontrol efek visual transisi layar dan kamera sinematik.
+
+| Fungsi | Parameter | Nilai Balik | Deskripsi |
+| :--- | :--- | :--- | :--- |
+| `Screen.Fade(fadeIn, [durationMs])` | `fadeIn` (bool: true=in, false=out), `[durationMs]` (ms) | `boolean` | Efek layar hitam transisi fade in / fade out sinematik. |
+| `Screen.FadeIn([durationMs])` | `[durationMs]` (int ms, default 1000) | `boolean` | Layar kembali terang dari hitam (Fade In). |
+| `Screen.FadeOut([durationMs])` | `[durationMs]` (int ms, default 1000) | `boolean` | Layar menggelap menjadi hitam (Fade Out). |
+| `Camera.Shake([intensity])` | `[intensity]` (int, default 70) | `boolean` | Mengguncang kamera (*camera shake*). Sangat cocok saat ada gempa, tabrakan, atau ledakan dahsyat! |
+| `Camera.Restore()` | *(tidak ada)* | `boolean` | Mengembalikan posisi kamera ke belakang pemain seperti semula. |
+
+---
+
+### 8. Modul `Explosion` (Ledakan)
 Modul untuk memicu ledakan di koordinat tertentu atau langsung di sekitar pemain / kendaraan.
 
 | Fungsi | Parameter | Nilai Balik | Deskripsi |
@@ -189,7 +320,7 @@ end
 
 ---
 
-### 2. Modul `Player` (Karakter Pemain)
+### 9. Modul `Player` (Karakter Pemain)
 Modul untuk membaca dan memanipulasi keadaan karakter pemain (CJ).
 
 | Fungsi | Parameter | Nilai Balik | Deskripsi |
@@ -215,11 +346,18 @@ Modul untuk membaca dan memanipulasi keadaan karakter pemain (CJ).
 
 ---
 
-### 3. Modul `Vehicle` (Manipulasi Kendaraan)
-Modul untuk memanipulasi kendaraan (mobil, motor, sepeda, pesawat, helikopter, perahu). Parameter `veh` bersifat fleksibel: jika dikosongkan, otomatis menggunakan kendaraan yang sedang dinaiki pemain!
+### 10. Modul `Vehicle` (Manipulasi & Spawn Kendaraan)
+Modul untuk membuat (spawn) dan memanipulasi kendaraan (mobil, motor, sepeda, pesawat, helikopter, perahu). Parameter `veh` bersifat fleksibel: dapat berupa pointer (`lightuserdata`), handle SCM (`integer`), atau jika dikosongkan, otomatis menggunakan kendaraan yang sedang dinaiki pemain!
 
 | Fungsi | Parameter | Nilai Balik | Deskripsi |
 | :--- | :--- | :--- | :--- |
+| `Vehicle.Create(modelId, [x, y, z, heading])` | `modelId` (int), `[x, y, z, heading]` (opsional) | `handle, pointer` | 🚀 **Baru di v1.1.0!** Men-spawn kendaraan baru ke dunia game secara instan dengan auto-loading streaming model tanpa crash! Jika koordinat tidak diisi, mobil muncul tepat di depan pemain. Mengembalikan ID handle dan pointer memori. Alias: `Vehicle.Spawn`. |
+| `Vehicle.Spawn(modelId, ...)` | *(sama dengan Vehicle.Create)* | `handle, pointer` | Alias untuk `Vehicle.Create`. |
+| `Vehicle.SetColor([veh], primary, secondary)`| `[veh]`, `primary` (int), `secondary` (int) | `boolean` | 🚀 **Baru di v1.1.0!** Mengubah warna primer dan sekunder kendaraan. |
+| `Vehicle.SetEngineState([veh], state)` | `[veh]`, `state` (boolean: true=hidup, false=mati) | `boolean` | 🚀 **Baru di v1.1.0!** Menghidupkan atau mematikan mesin kendaraan seketika. |
+| `Vehicle.PopTyre([veh], tyreId)` | `[veh]`, `tyreId` (0: Kiri Depan, 1: Kiri Belakang, 2: Kanan Depan, 3: Kanan Belakang) | `boolean` | 🚀 **Baru di v1.1.0!** Meletuskan ban kendaraan secara spesifik. |
+| `Vehicle.GetHandle([veh])` | `[veh]` (pointer/handle) | `integer` | Mengambil handle SCM unik kendaraan. |
+| `Vehicle.GetPointer([veh])` | `[veh]` (pointer/handle) | `lightuserdata` | Mengambil pointer memori native `CVehicle*`. |
 | `Vehicle.GetPlayerVehicle()` | *(tidak ada)* | `lightuserdata` atau `nil` | Mengambil pointer kendaraan pemain saat ini. |
 | `Vehicle.GetPosition([veh])` | `[veh]` (pointer, opsional) | `x, y, z` (3 numbers) | Mengambil koordinat posisi kendaraan saat ini. |
 | `Vehicle.SetPosition([veh], x, y, z)` | `[veh], x, y, z` atau `x, y, z` | `boolean` | Memindahkan (teleportasi) kendaraan ke posisi baru. Alias: `Vehicle.Teleport`. |
@@ -240,7 +378,7 @@ Modul untuk memanipulasi kendaraan (mobil, motor, sepeda, pesawat, helikopter, p
 
 ---
 
-### 4. Modul `Game` (Manipulasi Dunia & Lingkungan)
+### 11. Modul `Game` (Manipulasi Dunia & Lingkungan)
 Modul untuk mengontrol cuaca, jam dunia, kecepatan game, teleportasi aman, dan UI dialog.
 
 | Fungsi | Parameter | Nilai Balik | Deskripsi |
@@ -283,7 +421,7 @@ Modul untuk mengontrol cuaca, jam dunia, kecepatan game, teleportasi aman, dan U
 
 ---
 
-### 5. Modul `Timer` (Alternatif Mudah Berbasis Detik)
+### 12. Modul `Timer` (Alternatif Mudah Berbasis Detik)
 Untuk pemula yang tidak ingin pusing menghitung frame rate atau khawatir script telat berjalan akibat frame drop:
 
 ```lua
@@ -307,9 +445,17 @@ Fungsi global JavaScript / browser juga tersedia:
 
 ---
 
-### 6. Modul `AMLua` & Global
-Namespace utama yang merangkum seluruh modul:
-- `AMLua.Version` -> `"1.0.6"`
+### 13. Modul `AMLua` & Global
+Namespace utama yang merangkum seluruh modul sistem dan game:
+- `AMLua.Version` -> `"1.1.0"`
+- `AMLua.Http` -> referensi ke modul `Http`
+- `AMLua.Json` -> referensi ke modul `Json`
+- `AMLua.Weapon` -> referensi ke modul `Weapon`
+- `AMLua.Device` -> referensi ke modul `Device`
+- `AMLua.Audio` -> referensi ke modul `Audio`
+- `AMLua.File` -> referensi ke modul `File`
+- `AMLua.Screen` -> referensi ke modul `Screen`
+- `AMLua.Camera` -> referensi ke modul `Camera`
 - `AMLua.Explosion` -> referensi ke modul `Explosion`
 - `AMLua.Player` -> referensi ke modul `Player`
 - `AMLua.Vehicle` -> referensi ke modul `Vehicle`
@@ -319,7 +465,7 @@ Namespace utama yang merangkum seluruh modul:
 
 ---
 
-### 7. Daftar Kode Warna & Format Dialog GTA SA
+### 14. Daftar Kode Warna & Format Dialog GTA SA
 Teks pada `Game.PrintText()` mendukung kode warna bawaan engine GTA:
 
 | Kode Format | Warna / Efek | Contoh Hasil |
@@ -468,6 +614,71 @@ Jika terjadi kesalahan pada script, periksa:
 
 ---
 
+### Pelajaran 10: Menghubungkan Game ke Internet & REST API (Http & Json)
+Kini Anda bisa mengambil data cuaca asli, berita, akun online, leaderboard, atau webhook Discord langsung dari dalam game GTA San Andreas Android:
+```lua
+-- Contoh: Mengambil data dari REST API publik
+Http.Get("https://httpbin.org/get", function(response)
+    if response.ok then
+        local data = Json.Decode(response.body)
+        Game.PrintText("~g~Internet Connected!~n~~w~IP: " .. tostring(data.origin), 4000)
+        Device.Toast("Berhasil terhubung ke Internet!", false)
+    else
+        Game.Log("Gagal request HTTP: " .. tostring(response.error))
+    end
+end)
+```
+
+---
+
+### Pelajaran 11: Memberikan Senjata & Amunisi (Weapon API)
+Beri karakter Anda senjata apa saja tanpa perlu kode cheat:
+```lua
+-- Berikan AK-47 dengan 500 peluru dan langsung pegang di tangan
+Weapon.Give(Weapon.AK47, 500)
+Weapon.SetCurrent(Weapon.AK47)
+
+-- Berikan Minigun dan RPG
+Weapon.Give(Weapon.MINIGUN, 1000)
+Weapon.Give(Weapon.ROCKETLAUNCHER, 50)
+
+Audio.PlaySound(1052) -- Suara pickup senjata
+Game.PrintText("~g~Senjata Lengkap Diberikan!", 3000)
+```
+
+---
+
+### Pelajaran 12: Men-Spawn Mobil Kustom & Ubah Warna (Vehicle.Create)
+Munculkan kendaraan favorit Anda tepat di depan karakter secara instan tanpa crash:
+```lua
+-- Spawn Infernus (Model ID 411) di depan pemain
+local vehHandle, vehPtr = Vehicle.Create(411)
+if vehHandle and vehHandle > 0 then
+    -- Ubah warna menjadi Merah (3) dan Hitam (0)
+    Vehicle.SetColor(vehHandle, 3, 0)
+    Game.PrintText("~y~Infernus Berhasil Di-Spawn!", 3000)
+end
+```
+
+---
+
+### Pelajaran 13: Membaca & Menulis File Data Mod (File API)
+Simpan skor pemain atau konfigurasi mod ke file teks:
+```lua
+local savePath = File.GetScriptsPath() .. "/data_pemain.txt"
+
+-- Tulis data
+File.Write(savePath, "Level: 5\nUang: 100000\nStatus: Juara")
+
+-- Cek dan baca kembali
+if File.Exists(savePath) then
+    local isi = File.Read(savePath)
+    Game.Log("Isi data file:\n" .. isi)
+end
+```
+
+---
+
 ## 📱 In-Game Mod List Viewer
 
 AMLua memiliki fitur visual native untuk melihat daftar script apa saja yang sedang aktif berjalan di GTA San Andreas Anda.
@@ -501,7 +712,7 @@ Anda tidak perlu lagi ribet mengekstrak file ZIP di HP jika hanya butuh file `.s
      - Unduh **`libAMLua64.so`** jika HP Anda 64-bit (kebanyakan HP Android rilisan 2018 ke atas).
      - Unduh **`libAMLua32.so`** jika HP Anda 32-bit.
    - **Opsi Lengkap (ZIP)**:
-     - Unduh **`AMLua-v1.0.6.zip`** (berisi kedua file binary `.so`, contoh script `test.lua`, dan dokumentasi lengkap).
+     - Unduh **`AMLua-v1.1.0.zip`** (berisi kedua file binary `.so`, contoh script `test.lua`, dan dokumentasi lengkap).
 3. Salin file `.so` yang sesuai ke direktori mods AML game Anda:
    ```text
    /storage/emulated/0/Android/data/com.rockstargames.gtasa/mods/

@@ -1,5 +1,7 @@
 #include "lua_bindings.h"
 #include "crash_handler.h"
+#include "http_client.h"
+#include "json_helper.h"
 #include <mod/aml.h>
 
 #include <android/log.h>
@@ -16,6 +18,8 @@
 #include <cmath>
 #include <vector>
 #include <string>
+#include <fstream>
+#include <sstream>
 #include <algorithm>
 #include <chrono>
 
@@ -101,6 +105,14 @@ namespace AMLua
     typedef void  (*SetWantedLevel_t)(void* wanted, int level);
     typedef void  (*SetWantedLevelNoDrop_t)(void* wanted, int level);
     typedef int   (*GetWantedLevel_t)(void* wanted);
+    typedef int   (*GetPedRef_t)(void* ped);
+    typedef void* (*GetPed_t)(int ref);
+    typedef int   (*GetVehicleRef_t)(void* veh);
+    typedef void* (*GetVehicle_t)(int ref);
+    typedef void  (*GiveWeapon_t)(void* ped, int weaponType, unsigned int ammo, bool likeUnused);
+    typedef void  (*SetCurrentWeapon_t)(void* ped, int weaponType);
+    typedef void  (*ClearWeapons_t)(void* ped);
+    typedef void  (*RemoveWeapon_t)(void* ped, int weaponType);
 
     static FindPlayerPed_t         pfnFindPlayerPed = nullptr;
     static FindPlayerVehicle_t     pfnFindPlayerVehicle = nullptr;
@@ -132,6 +144,14 @@ namespace AMLua
     static SetWantedLevel_t        pfnSetWantedLevel = nullptr;
     static SetWantedLevelNoDrop_t  pfnSetWantedLevelNoDrop = nullptr;
     static GetWantedLevel_t        pfnGetWantedLevel = nullptr;
+    static GetPedRef_t             pfnGetPedRef = nullptr;
+    static GetPed_t                pfnGetPed = nullptr;
+    static GetVehicleRef_t         pfnGetVehicleRef = nullptr;
+    static GetVehicle_t            pfnGetVehicle = nullptr;
+    static GiveWeapon_t            pfnGiveWeapon = nullptr;
+    static SetCurrentWeapon_t      pfnSetCurrentWeapon = nullptr;
+    static ClearWeapons_t          pfnClearWeapons = nullptr;
+    static RemoveWeapon_t          pfnRemoveWeapon = nullptr;
 
     // Direct game memory pointers
     static float*                  pTimeScale = nullptr;
@@ -478,6 +498,74 @@ namespace AMLua
         char            m_safetyPadding[256];
     };
 
+    static ScriptRunner s_Script;
+    static bool s_ScriptInited = false;
+
+    static void EnsureScriptInited()
+    {
+        if (!s_ScriptInited)
+        {
+            memset(&s_Script, 0, sizeof(s_Script));
+            strncpy(s_Script.m_szName, "amlua", sizeof(s_Script.m_szName) - 1);
+            if (pfnScriptInit)
+            {
+                pfnScriptInit(&s_Script);
+            }
+            s_ScriptInited = true;
+        }
+    }
+
+    static bool RunSCM(uint16_t opcode, const char* fmt = "", ...)
+    {
+        if (!pfnProcessOneCommand) return false;
+        EnsureScriptInited();
+
+        alignas(16) uint8_t buffer[128] = {0};
+        memcpy(&buffer[0], &opcode, 2);
+        size_t offset = 2;
+
+        va_list args;
+        va_start(args, fmt);
+
+        for (const char* p = fmt; *p; ++p)
+        {
+            if (*p == 'i') // 32-bit int
+            {
+                int val = va_arg(args, int);
+                buffer[offset++] = 0x01;
+                memcpy(&buffer[offset], &val, 4);
+                offset += 4;
+            }
+            else if (*p == 'f') // 32-bit float
+            {
+                float val = (float)va_arg(args, double);
+                buffer[offset++] = 0x06;
+                memcpy(&buffer[offset], &val, 4);
+                offset += 4;
+            }
+            else if (*p == 'v') // local var index (e.g. 0 for 0@)
+            {
+                uint16_t varIdx = (uint16_t)va_arg(args, int);
+                buffer[offset++] = 0x03;
+                memcpy(&buffer[offset], &varIdx, 2);
+                offset += 2;
+            }
+        }
+        va_end(args);
+
+        buffer[offset++] = 0x00;
+
+        s_Script.m_bIsActive = true;
+        s_Script.m_nScriptBrainType = -1;
+        s_Script.m_bWastedBustedCheck = true;
+        s_Script.m_nSP = 0;
+        s_Script.m_pBaseIP = buffer;
+        s_Script.m_pCurrentIP = buffer;
+
+        pfnProcessOneCommand(&s_Script);
+        return true;
+    }
+
     // Helper to create explosion via game engine with full visual effects & physics
     static bool CreateExplosionInternal(float x, float y, float z, int type, float radius, bool makeSound, float camShake)
     {
@@ -485,23 +573,9 @@ namespace AMLua
         bool visualTriggered = false;
 
         // Method 1: SCM Opcode Execution via CRunningScript
-        // Opcode 020C (ADD_EXPLOSION) or 0948 (ADD_EXPLOSION_VARIABLE_SHAKE) or 0565 (ADD_EXPLOSION_NO_SOUND)
-        // This executes Rockstar's native script opcode that generates the full RenderWare 3D
-        // animated fireball mesh, dynamic point light, smoke particle clouds, scorch mark, and audio!
         if (pfnProcessOneCommand || pfnProcessCommands200To299)
         {
-            static ScriptRunner s_Script;
-            static bool s_ScriptInited = false;
-            if (!s_ScriptInited)
-            {
-                memset(&s_Script, 0, sizeof(s_Script));
-                strncpy(s_Script.m_szName, "amlua", sizeof(s_Script.m_szName) - 1);
-                if (pfnScriptInit)
-                {
-                    pfnScriptInit(&s_Script);
-                }
-                s_ScriptInited = true;
-            }
+            EnsureScriptInited();
 
             alignas(16) uint8_t cmdBuffer[64] = {0};
             s_Script.m_bIsActive = true;
@@ -2129,6 +2203,811 @@ namespace AMLua
         }
     }
 
+    // =========================================================================
+    // v1.1.0 Extended Game & System APIs: Weapon, Device, Audio, File, Screen, Camera, Vehicle
+    // =========================================================================
+
+    // Helper: Safely resolve CPed pointer and SCM handle
+    static void* GetPedFromArg(lua_State* L, int idx)
+    {
+        if (lua_isnoneornil(L, idx))
+        {
+            if (pfnFindPlayerPed) return pfnFindPlayerPed(-1);
+            return nullptr;
+        }
+        if (lua_islightuserdata(L, idx))
+        {
+            void* p = lua_touserdata(L, idx);
+            return IsValidGameObject(p) ? p : nullptr;
+        }
+        if (lua_isinteger(L, idx))
+        {
+            int val = (int)lua_tointeger(L, idx);
+            if (pfnGetPed && val > 0 && val < 100000)
+            {
+                void* p = pfnGetPed(val);
+                if (IsValidGameObject(p)) return p;
+            }
+            void* p = (void*)(uintptr_t)val;
+            return IsValidGameObject(p) ? p : nullptr;
+        }
+        return nullptr;
+    }
+
+    static int GetPedHandle(void* ped)
+    {
+        if (!IsValidGameObject(ped)) return 0;
+        if (pfnGetPedRef)
+        {
+            return pfnGetPedRef(ped);
+        }
+        return 0;
+    }
+
+    // Helper: Safely resolve CVehicle pointer and SCM handle
+    static void* GetVehicleFromArg(lua_State* L, int idx)
+    {
+        if (lua_isnoneornil(L, idx))
+        {
+            return GetLocalPlayerVehicle();
+        }
+        if (lua_islightuserdata(L, idx))
+        {
+            void* p = lua_touserdata(L, idx);
+            return IsValidGameObject(p) ? p : nullptr;
+        }
+        if (lua_isinteger(L, idx))
+        {
+            int val = (int)lua_tointeger(L, idx);
+            if (pfnGetVehicle && val > 0 && val < 100000)
+            {
+                void* p = pfnGetVehicle(val);
+                if (IsValidGameObject(p)) return p;
+            }
+            void* p = (void*)(uintptr_t)val;
+            return IsValidGameObject(p) ? p : nullptr;
+        }
+        return nullptr;
+    }
+
+    static int GetVehicleHandle(void* veh)
+    {
+        if (!IsValidGameObject(veh)) return 0;
+        if (pfnGetVehicleRef)
+        {
+            return pfnGetVehicleRef(veh);
+        }
+        return 0;
+    }
+
+    // -------------------------------------------------------------------------
+    // Vehicle Extended Bindings
+    // -------------------------------------------------------------------------
+
+    // Vehicle.Create(modelId, [x, y, z, heading]) -> handle, pointer
+    static int Lua_Vehicle_Create(lua_State* L)
+    {
+        int modelId = (int)luaL_checkinteger(L, 1);
+        float x = 0, y = 0, z = 0;
+        float heading = 0.0f;
+
+        if (lua_gettop(L) >= 4)
+        {
+            x = (float)luaL_checknumber(L, 2);
+            y = (float)luaL_checknumber(L, 3);
+            z = (float)luaL_checknumber(L, 4);
+            if (lua_gettop(L) >= 5)
+            {
+                heading = (float)luaL_checknumber(L, 5);
+            }
+        }
+        else
+        {
+            // Default: 5 units ahead of player in facing direction
+            void* ped = pfnFindPlayerPed ? pfnFindPlayerPed(-1) : nullptr;
+            if (ped)
+            {
+                GetEntityPosition(ped, x, y, z);
+                float pHeading = 0.0f;
+                float* pH = (float*)((uintptr_t)ped + OFF_HEADING);
+                if (IsValidMemory(pH, sizeof(float))) pHeading = *pH;
+                heading = pHeading;
+                float rad = pHeading * (3.14159265f / 180.0f);
+                x -= sinf(rad) * 5.0f;
+                y += cosf(rad) * 5.0f;
+            }
+        }
+
+        if (!pfnProcessOneCommand)
+        {
+            lua_pushnil(L);
+            lua_pushstring(L, "SCM execution engine not available");
+            return 2;
+        }
+
+        // 1. Request model (0247)
+        RunSCM(0x0247, "i", modelId);
+        // 2. Load all models now (038B)
+        RunSCM(0x038B, "");
+
+        // 3. Create car into 0@ (00A5)
+        s_Script.m_aLocalVars[0].iParam = 0;
+        RunSCM(0x00A5, "ifffv", modelId, x, y, z, 0);
+        int carHandle = s_Script.m_aLocalVars[0].iParam;
+
+        if (carHandle > 0 && heading != 0.0f)
+        {
+            // 4. Set car heading (0175)
+            RunSCM(0x0175, "vf", 0, heading);
+        }
+
+        // 5. Mark model as no longer needed (0249)
+        RunSCM(0x0249, "i", modelId);
+
+        void* pVeh = nullptr;
+        if (pfnGetVehicle && carHandle > 0)
+        {
+            pVeh = pfnGetVehicle(carHandle);
+        }
+
+        lua_pushinteger(L, carHandle);
+        if (pVeh)
+        {
+            lua_pushlightuserdata(L, pVeh);
+            return 2;
+        }
+        return 1;
+    }
+
+    // Vehicle.SetColor(veh, primary, secondary)
+    static int Lua_Vehicle_SetColor(lua_State* L)
+    {
+        int arg = 1;
+        void* veh = nullptr;
+        int h = 0;
+
+        if (lua_islightuserdata(L, 1) || (lua_isinteger(L, 1) && lua_gettop(L) >= 3))
+        {
+            veh = GetVehicleFromArg(L, 1);
+            if (lua_isinteger(L, 1)) h = (int)lua_tointeger(L, 1);
+            arg = 2;
+        }
+        else
+        {
+            veh = GetLocalPlayerVehicle();
+        }
+
+        int primary = (int)luaL_checkinteger(L, arg);
+        int secondary = (int)luaL_checkinteger(L, arg + 1);
+
+        if (h <= 0 && veh)
+        {
+            h = GetVehicleHandle(veh);
+        }
+
+        if (h > 0)
+        {
+            RunSCM(0x0229, "iii", h, primary, secondary);
+            lua_pushboolean(L, 1);
+            return 1;
+        }
+
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+
+    // Vehicle.SetEngineState(veh, state)
+    static int Lua_Vehicle_SetEngineState(lua_State* L)
+    {
+        int arg = 1;
+        void* veh = nullptr;
+        int h = 0;
+
+        if (lua_islightuserdata(L, 1) || (lua_isinteger(L, 1) && lua_gettop(L) >= 2))
+        {
+            veh = GetVehicleFromArg(L, 1);
+            if (lua_isinteger(L, 1)) h = (int)lua_tointeger(L, 1);
+            arg = 2;
+        }
+        else
+        {
+            veh = GetLocalPlayerVehicle();
+        }
+
+        bool state = lua_toboolean(L, arg);
+        if (h <= 0 && veh)
+        {
+            h = GetVehicleHandle(veh);
+        }
+
+        if (h > 0)
+        {
+            RunSCM(0x0918, "ii", h, state ? 1 : 0);
+            lua_pushboolean(L, 1);
+            return 1;
+        }
+
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+
+    // Vehicle.PopTyre(veh, tyreId)
+    static int Lua_Vehicle_PopTyre(lua_State* L)
+    {
+        int arg = 1;
+        void* veh = nullptr;
+        int h = 0;
+
+        if (lua_islightuserdata(L, 1) || (lua_isinteger(L, 1) && lua_gettop(L) >= 2))
+        {
+            veh = GetVehicleFromArg(L, 1);
+            if (lua_isinteger(L, 1)) h = (int)lua_tointeger(L, 1);
+            arg = 2;
+        }
+        else
+        {
+            veh = GetLocalPlayerVehicle();
+        }
+
+        int tyreId = (int)luaL_checkinteger(L, arg);
+        if (h <= 0 && veh)
+        {
+            h = GetVehicleHandle(veh);
+        }
+
+        if (h > 0)
+        {
+            RunSCM(0x04FE, "ii", h, tyreId);
+            lua_pushboolean(L, 1);
+            return 1;
+        }
+
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+
+    // Vehicle.GetHandle(veh)
+    static int Lua_Vehicle_GetHandle(lua_State* L)
+    {
+        void* veh = GetVehicleFromArg(L, 1);
+        if (!veh) return 0;
+        int h = GetVehicleHandle(veh);
+        lua_pushinteger(L, h);
+        return 1;
+    }
+
+    // Vehicle.GetPointer(veh)
+    static int Lua_Vehicle_GetPointer(lua_State* L)
+    {
+        void* veh = GetVehicleFromArg(L, 1);
+        if (!veh) return 0;
+        lua_pushlightuserdata(L, veh);
+        return 1;
+    }
+
+    // -------------------------------------------------------------------------
+    // Weapon Bindings
+    // -------------------------------------------------------------------------
+
+    // Weapon.Give(ped or nil, weaponId, ammo)
+    static int Lua_Weapon_Give(lua_State* L)
+    {
+        int arg = 1;
+        void* ped = nullptr;
+
+        if (lua_islightuserdata(L, 1) || (lua_isinteger(L, 1) && lua_gettop(L) >= 3))
+        {
+            ped = GetPedFromArg(L, 1);
+            arg = 2;
+        }
+        else
+        {
+            ped = pfnFindPlayerPed ? pfnFindPlayerPed(-1) : nullptr;
+        }
+
+        if (!IsValidGameObject(ped))
+        {
+            lua_pushboolean(L, 0);
+            return 1;
+        }
+
+        int weaponId = (int)luaL_checkinteger(L, arg);
+        int ammo = (int)luaL_checkinteger(L, arg + 1);
+
+        if (pfnGiveWeapon)
+        {
+            pfnGiveWeapon(ped, weaponId, (unsigned int)ammo, true);
+            lua_pushboolean(L, 1);
+            return 1;
+        }
+
+        int h = GetPedHandle(ped);
+        if (h > 0)
+        {
+            RunSCM(0x01B2, "iii", h, weaponId, ammo);
+            lua_pushboolean(L, 1);
+            return 1;
+        }
+
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+
+    // Weapon.SetCurrent(ped or nil, weaponId)
+    static int Lua_Weapon_SetCurrent(lua_State* L)
+    {
+        int arg = 1;
+        void* ped = nullptr;
+
+        if (lua_islightuserdata(L, 1) || (lua_isinteger(L, 1) && lua_gettop(L) >= 2))
+        {
+            ped = GetPedFromArg(L, 1);
+            arg = 2;
+        }
+        else
+        {
+            ped = pfnFindPlayerPed ? pfnFindPlayerPed(-1) : nullptr;
+        }
+
+        if (!IsValidGameObject(ped))
+        {
+            lua_pushboolean(L, 0);
+            return 1;
+        }
+
+        int weaponId = (int)luaL_checkinteger(L, arg);
+        if (pfnSetCurrentWeapon)
+        {
+            pfnSetCurrentWeapon(ped, weaponId);
+            lua_pushboolean(L, 1);
+            return 1;
+        }
+
+        int h = GetPedHandle(ped);
+        if (h > 0)
+        {
+            RunSCM(0x01B8, "iii", h, weaponId, 1);
+            lua_pushboolean(L, 1);
+            return 1;
+        }
+
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+
+    // Weapon.Remove(ped or nil, weaponId)
+    static int Lua_Weapon_Remove(lua_State* L)
+    {
+        int arg = 1;
+        void* ped = nullptr;
+
+        if (lua_islightuserdata(L, 1) || (lua_isinteger(L, 1) && lua_gettop(L) >= 2))
+        {
+            ped = GetPedFromArg(L, 1);
+            arg = 2;
+        }
+        else
+        {
+            ped = pfnFindPlayerPed ? pfnFindPlayerPed(-1) : nullptr;
+        }
+
+        if (!IsValidGameObject(ped))
+        {
+            lua_pushboolean(L, 0);
+            return 1;
+        }
+
+        int weaponId = (int)luaL_checkinteger(L, arg);
+        if (pfnRemoveWeapon)
+        {
+            pfnRemoveWeapon(ped, weaponId);
+            lua_pushboolean(L, 1);
+            return 1;
+        }
+
+        int h = GetPedHandle(ped);
+        if (h > 0)
+        {
+            RunSCM(0x017A, "ii", h, weaponId);
+            lua_pushboolean(L, 1);
+            return 1;
+        }
+
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+
+    // Weapon.RemoveAll(ped or nil)
+    static int Lua_Weapon_RemoveAll(lua_State* L)
+    {
+        void* ped = GetPedFromArg(L, 1);
+        if (!IsValidGameObject(ped))
+        {
+            lua_pushboolean(L, 0);
+            return 1;
+        }
+
+        if (pfnClearWeapons)
+        {
+            pfnClearWeapons(ped);
+            lua_pushboolean(L, 1);
+            return 1;
+        }
+
+        int h = GetPedHandle(ped);
+        if (h > 0)
+        {
+            RunSCM(0x048F, "i", h);
+            lua_pushboolean(L, 1);
+            return 1;
+        }
+
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+
+    static void RegisterWeaponConstants(lua_State* L)
+    {
+        lua_pushinteger(L, 0);  lua_setfield(L, -2, "FIST");
+        lua_pushinteger(L, 1);  lua_setfield(L, -2, "BRASSKNUCKLE");
+        lua_pushinteger(L, 2);  lua_setfield(L, -2, "GOLFCLUB");
+        lua_pushinteger(L, 3);  lua_setfield(L, -2, "NIGHTSTICK");
+        lua_pushinteger(L, 4);  lua_setfield(L, -2, "KNIFE");
+        lua_pushinteger(L, 5);  lua_setfield(L, -2, "BASEBALLBAT");
+        lua_pushinteger(L, 6);  lua_setfield(L, -2, "SHOVEL");
+        lua_pushinteger(L, 7);  lua_setfield(L, -2, "POOLCUE");
+        lua_pushinteger(L, 8);  lua_setfield(L, -2, "KATANA");
+        lua_pushinteger(L, 9);  lua_setfield(L, -2, "CHAINSAW");
+        lua_pushinteger(L, 14); lua_setfield(L, -2, "FLOWERS");
+        lua_pushinteger(L, 15); lua_setfield(L, -2, "CANE");
+        lua_pushinteger(L, 16); lua_setfield(L, -2, "GRENADE");
+        lua_pushinteger(L, 17); lua_setfield(L, -2, "TEARGAS");
+        lua_pushinteger(L, 18); lua_setfield(L, -2, "MOLOTOV");
+        lua_pushinteger(L, 22); lua_setfield(L, -2, "PISTOL");
+        lua_pushinteger(L, 23); lua_setfield(L, -2, "PISTOL_SILENCED");
+        lua_pushinteger(L, 24); lua_setfield(L, -2, "DESERT_EAGLE");
+        lua_pushinteger(L, 25); lua_setfield(L, -2, "SHOTGUN");
+        lua_pushinteger(L, 26); lua_setfield(L, -2, "SAWNOFF");
+        lua_pushinteger(L, 27); lua_setfield(L, -2, "SPAS12");
+        lua_pushinteger(L, 28); lua_setfield(L, -2, "MICRO_UZI");
+        lua_pushinteger(L, 29); lua_setfield(L, -2, "MP5");
+        lua_pushinteger(L, 30); lua_setfield(L, -2, "AK47");
+        lua_pushinteger(L, 31); lua_setfield(L, -2, "M4");
+        lua_pushinteger(L, 32); lua_setfield(L, -2, "TEC9");
+        lua_pushinteger(L, 33); lua_setfield(L, -2, "RIFLE");
+        lua_pushinteger(L, 34); lua_setfield(L, -2, "SNIPER");
+        lua_pushinteger(L, 35); lua_setfield(L, -2, "ROCKETLAUNCHER");
+        lua_pushinteger(L, 36); lua_setfield(L, -2, "HEATSEEKER");
+        lua_pushinteger(L, 37); lua_setfield(L, -2, "FLAMETHROWER");
+        lua_pushinteger(L, 38); lua_setfield(L, -2, "MINIGUN");
+        lua_pushinteger(L, 39); lua_setfield(L, -2, "SATCHEL");
+        lua_pushinteger(L, 40); lua_setfield(L, -2, "DETONATOR");
+        lua_pushinteger(L, 41); lua_setfield(L, -2, "SPRAYCAN");
+        lua_pushinteger(L, 42); lua_setfield(L, -2, "EXTINGUISHER");
+        lua_pushinteger(L, 43); lua_setfield(L, -2, "CAMERA");
+        lua_pushinteger(L, 44); lua_setfield(L, -2, "NIGHTVISION");
+        lua_pushinteger(L, 45); lua_setfield(L, -2, "THERMAL");
+        lua_pushinteger(L, 46); lua_setfield(L, -2, "PARACHUTE");
+    }
+
+    // -------------------------------------------------------------------------
+    // Device Bindings
+    // -------------------------------------------------------------------------
+
+    // Device.Vibrate(durationMs)
+    static int Lua_Device_Vibrate(lua_State* L)
+    {
+        int ms = (int)luaL_optinteger(L, 1, 100);
+        if (aml)
+        {
+            aml->DoVibro(ms);
+            lua_pushboolean(L, 1);
+            return 1;
+        }
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+
+    // Device.CancelVibrate()
+    static int Lua_Device_CancelVibrate(lua_State* L)
+    {
+        if (aml)
+        {
+            aml->CancelVibro();
+            lua_pushboolean(L, 1);
+            return 1;
+        }
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+
+    // Device.Toast(message, [longerDuration])
+    static int Lua_Device_Toast(lua_State* L)
+    {
+        const char* msg = luaL_checkstring(L, 1);
+        bool longer = lua_toboolean(L, 2);
+        if (aml)
+        {
+            aml->ShowToast(longer, "%s", msg);
+            lua_pushboolean(L, 1);
+            return 1;
+        }
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+
+    // Device.GetBatteryLevel() -> float
+    static int Lua_Device_GetBatteryLevel(lua_State* L)
+    {
+        if (aml)
+        {
+            float level = aml->GetBatteryLevel();
+            lua_pushnumber(L, (lua_Number)level);
+            return 1;
+        }
+        lua_pushnumber(L, -1.0);
+        return 1;
+    }
+
+    // Device.GetAndroidVersion() -> int
+    static int Lua_Device_GetAndroidVersion(lua_State* L)
+    {
+        if (aml)
+        {
+            int ver = aml->GetAndroidVersion();
+            lua_pushinteger(L, ver);
+            return 1;
+        }
+        lua_pushinteger(L, 0);
+        return 1;
+    }
+
+    // Device.GetDisplaySize() -> width, height
+    static int Lua_Device_GetDisplaySize(lua_State* L)
+    {
+        int w = 0, h = 0;
+        if (aml)
+        {
+            aml->GetDisplaySize(&w, &h);
+        }
+        lua_pushinteger(L, w);
+        lua_pushinteger(L, h);
+        return 2;
+    }
+
+    // -------------------------------------------------------------------------
+    // Audio Bindings
+    // -------------------------------------------------------------------------
+
+    // Audio.PlaySound(soundId, [x, y, z])
+    static int Lua_Audio_PlaySound(lua_State* L)
+    {
+        int soundId = (int)luaL_checkinteger(L, 1);
+        if (lua_gettop(L) >= 4)
+        {
+            float x = (float)luaL_checknumber(L, 2);
+            float y = (float)luaL_checknumber(L, 3);
+            float z = (float)luaL_checknumber(L, 4);
+            RunSCM(0x018C, "ifff", soundId, x, y, z);
+        }
+        else
+        {
+            RunSCM(0x018D, "i", soundId);
+        }
+        lua_pushboolean(L, 1);
+        return 1;
+    }
+
+    // Audio.SetRadioStation(stationId)
+    static int Lua_Audio_SetRadioStation(lua_State* L)
+    {
+        int station = (int)luaL_checkinteger(L, 1);
+        RunSCM(0x0417, "i", station);
+        lua_pushboolean(L, 1);
+        return 1;
+    }
+
+    // Audio.GetRadioStation() -> stationId
+    static int Lua_Audio_GetRadioStation(lua_State* L)
+    {
+        s_Script.m_aLocalVars[0].iParam = 0;
+        RunSCM(0x051E, "v", 0);
+        lua_pushinteger(L, s_Script.m_aLocalVars[0].iParam);
+        return 1;
+    }
+
+    static void RegisterAudioConstants(lua_State* L)
+    {
+        lua_pushinteger(L, 0);  lua_setfield(L, -2, "RADIO_OFF");
+        lua_pushinteger(L, 1);  lua_setfield(L, -2, "RADIO_BOUNCE");
+        lua_pushinteger(L, 2);  lua_setfield(L, -2, "RADIO_CSR");
+        lua_pushinteger(L, 3);  lua_setfield(L, -2, "RADIO_K_ROSE");
+        lua_pushinteger(L, 4);  lua_setfield(L, -2, "RADIO_K_DST");
+        lua_pushinteger(L, 5);  lua_setfield(L, -2, "RADIO_BOUNCE_FM");
+        lua_pushinteger(L, 6);  lua_setfield(L, -2, "RADIO_SF_UR");
+        lua_pushinteger(L, 7);  lua_setfield(L, -2, "RADIO_LOS_SANTOS");
+        lua_pushinteger(L, 8);  lua_setfield(L, -2, "RADIO_RADIO_X");
+        lua_pushinteger(L, 9);  lua_setfield(L, -2, "RADIO_CSR_103_9");
+        lua_pushinteger(L, 10); lua_setfield(L, -2, "RADIO_K_JAH");
+        lua_pushinteger(L, 11); lua_setfield(L, -2, "RADIO_MASTER_SOUNDS");
+        lua_pushinteger(L, 12); lua_setfield(L, -2, "RADIO_WCTR");
+        lua_pushinteger(L, 13); lua_setfield(L, -2, "RADIO_USER_TRACKS");
+    }
+
+    // -------------------------------------------------------------------------
+    // Screen & Camera Bindings
+    // -------------------------------------------------------------------------
+
+    // Screen.Fade(fadeIn, durationMs)
+    static int Lua_Screen_Fade(lua_State* L)
+    {
+        bool fadeIn = lua_toboolean(L, 1);
+        int duration = (int)luaL_optinteger(L, 2, 1000);
+        RunSCM(0x016A, "ii", fadeIn ? 1 : 0, duration);
+        lua_pushboolean(L, 1);
+        return 1;
+    }
+
+    // Screen.FadeIn(durationMs)
+    static int Lua_Screen_FadeIn(lua_State* L)
+    {
+        int duration = (int)luaL_optinteger(L, 1, 1000);
+        RunSCM(0x016A, "ii", 1, duration);
+        lua_pushboolean(L, 1);
+        return 1;
+    }
+
+    // Screen.FadeOut(durationMs)
+    static int Lua_Screen_FadeOut(lua_State* L)
+    {
+        int duration = (int)luaL_optinteger(L, 1, 1000);
+        RunSCM(0x016A, "ii", 0, duration);
+        lua_pushboolean(L, 1);
+        return 1;
+    }
+
+    // Camera.Shake(intensity)
+    static int Lua_Camera_Shake(lua_State* L)
+    {
+        int intensity = (int)luaL_optinteger(L, 1, 70);
+        RunSCM(0x0003, "i", intensity);
+        lua_pushboolean(L, 1);
+        return 1;
+    }
+
+    // Camera.Restore()
+    static int Lua_Camera_Restore(lua_State* L)
+    {
+        RunSCM(0x015D, "");
+        lua_pushboolean(L, 1);
+        return 1;
+    }
+
+    // -------------------------------------------------------------------------
+    // File I/O Bindings
+    // -------------------------------------------------------------------------
+
+    // File.Read(filePath) -> content or nil, error
+    static int Lua_File_Read(lua_State* L)
+    {
+        const char* path = luaL_checkstring(L, 1);
+        std::ifstream file(path, std::ios::binary);
+        if (!file.is_open())
+        {
+            lua_pushnil(L);
+            lua_pushstring(L, "Could not open file for reading");
+            return 2;
+        }
+
+        std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        lua_pushlstring(L, content.data(), content.size());
+        return 1;
+    }
+
+    // File.Write(filePath, content) -> bool, error
+    static int Lua_File_Write(lua_State* L)
+    {
+        const char* path = luaL_checkstring(L, 1);
+        size_t len = 0;
+        const char* content = luaL_checklstring(L, 2, &len);
+
+        std::ofstream file(path, std::ios::binary | std::ios::trunc);
+        if (!file.is_open())
+        {
+            lua_pushboolean(L, 0);
+            lua_pushstring(L, "Could not open file for writing");
+            return 2;
+        }
+
+        file.write(content, len);
+        lua_pushboolean(L, 1);
+        return 1;
+    }
+
+    // File.Append(filePath, content) -> bool, error
+    static int Lua_File_Append(lua_State* L)
+    {
+        const char* path = luaL_checkstring(L, 1);
+        size_t len = 0;
+        const char* content = luaL_checklstring(L, 2, &len);
+
+        std::ofstream file(path, std::ios::binary | std::ios::app);
+        if (!file.is_open())
+        {
+            lua_pushboolean(L, 0);
+            lua_pushstring(L, "Could not open file for appending");
+            return 2;
+        }
+
+        file.write(content, len);
+        lua_pushboolean(L, 1);
+        return 1;
+    }
+
+    // File.Exists(filePath) -> bool
+    static int Lua_File_Exists(lua_State* L)
+    {
+        const char* path = luaL_checkstring(L, 1);
+        struct stat st;
+        lua_pushboolean(L, stat(path, &st) == 0);
+        return 1;
+    }
+
+    // File.Delete(filePath) -> bool
+    static int Lua_File_Delete(lua_State* L)
+    {
+        const char* path = luaL_checkstring(L, 1);
+        lua_pushboolean(L, remove(path) == 0);
+        return 1;
+    }
+
+    // File.List(dirPath) -> table of filenames
+    static int Lua_File_List(lua_State* L)
+    {
+        const char* dirPath = luaL_checkstring(L, 1);
+        DIR* d = opendir(dirPath);
+        if (!d)
+        {
+            lua_pushnil(L);
+            lua_pushstring(L, "Could not open directory");
+            return 2;
+        }
+
+        lua_newtable(L);
+        int idx = 1;
+        struct dirent* ent;
+        while ((ent = readdir(d)) != nullptr)
+        {
+            if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
+            lua_pushstring(L, ent->d_name);
+            lua_rawseti(L, -2, idx++);
+        }
+        closedir(d);
+        return 1;
+    }
+
+    // File.GetScriptsPath() -> string
+    static int Lua_File_GetScriptsPath(lua_State* L)
+    {
+        lua_pushstring(L, g_ScriptsDirPath.c_str());
+        return 1;
+    }
+
+    // File.GetDataPath() -> string
+    static int Lua_File_GetDataPath(lua_State* L)
+    {
+        size_t lastSlash = g_LogFilePath.find_last_of('/');
+        if (lastSlash != std::string::npos)
+        {
+            lua_pushstring(L, g_LogFilePath.substr(0, lastSlash).c_str());
+        }
+        else
+        {
+            lua_pushstring(L, g_LogFilePath.c_str());
+        }
+        return 1;
+    }
+
     // Sandboxing: disable dangerous os / io / package capabilities
     static void ApplySandbox(lua_State* L)
     {
@@ -2244,6 +3123,22 @@ namespace AMLua
         lua_setfield(L, -2, "GetHeading");
         lua_pushcfunction(L, Lua_Vehicle_SetHeading);
         lua_setfield(L, -2, "SetHeading");
+
+        // Vehicle Extended
+        lua_pushcfunction(L, Lua_Vehicle_Create);
+        lua_setfield(L, -2, "Create");
+        lua_pushcfunction(L, Lua_Vehicle_Create);
+        lua_setfield(L, -2, "Spawn");
+        lua_pushcfunction(L, Lua_Vehicle_SetColor);
+        lua_setfield(L, -2, "SetColor");
+        lua_pushcfunction(L, Lua_Vehicle_SetEngineState);
+        lua_setfield(L, -2, "SetEngineState");
+        lua_pushcfunction(L, Lua_Vehicle_PopTyre);
+        lua_setfield(L, -2, "PopTyre");
+        lua_pushcfunction(L, Lua_Vehicle_GetHandle);
+        lua_setfield(L, -2, "GetHandle");
+        lua_pushcfunction(L, Lua_Vehicle_GetPointer);
+        lua_setfield(L, -2, "GetPointer");
         lua_setglobal(L, "Vehicle");
 
         // Table: Explosion
@@ -2350,11 +3245,93 @@ namespace AMLua
         lua_setfield(L, -2, "ClearTimeout");
         lua_setglobal(L, "Timer");
 
+        // Table: Weapon
+        lua_newtable(L);
+        lua_pushcfunction(L, Lua_Weapon_Give);
+        lua_setfield(L, -2, "Give");
+        lua_pushcfunction(L, Lua_Weapon_SetCurrent);
+        lua_setfield(L, -2, "SetCurrent");
+        lua_pushcfunction(L, Lua_Weapon_Remove);
+        lua_setfield(L, -2, "Remove");
+        lua_pushcfunction(L, Lua_Weapon_RemoveAll);
+        lua_setfield(L, -2, "RemoveAll");
+        RegisterWeaponConstants(L);
+        lua_setglobal(L, "Weapon");
+
+        // Table: Device
+        lua_newtable(L);
+        lua_pushcfunction(L, Lua_Device_Vibrate);
+        lua_setfield(L, -2, "Vibrate");
+        lua_pushcfunction(L, Lua_Device_CancelVibrate);
+        lua_setfield(L, -2, "CancelVibrate");
+        lua_pushcfunction(L, Lua_Device_Toast);
+        lua_setfield(L, -2, "Toast");
+        lua_pushcfunction(L, Lua_Device_GetBatteryLevel);
+        lua_setfield(L, -2, "GetBatteryLevel");
+        lua_pushcfunction(L, Lua_Device_GetAndroidVersion);
+        lua_setfield(L, -2, "GetAndroidVersion");
+        lua_pushcfunction(L, Lua_Device_GetDisplaySize);
+        lua_setfield(L, -2, "GetDisplaySize");
+        lua_setglobal(L, "Device");
+
+        // Table: Audio
+        lua_newtable(L);
+        lua_pushcfunction(L, Lua_Audio_PlaySound);
+        lua_setfield(L, -2, "PlaySound");
+        lua_pushcfunction(L, Lua_Audio_SetRadioStation);
+        lua_setfield(L, -2, "SetRadioStation");
+        lua_pushcfunction(L, Lua_Audio_GetRadioStation);
+        lua_setfield(L, -2, "GetRadioStation");
+        RegisterAudioConstants(L);
+        lua_setglobal(L, "Audio");
+
+        // Table: Screen
+        lua_newtable(L);
+        lua_pushcfunction(L, Lua_Screen_Fade);
+        lua_setfield(L, -2, "Fade");
+        lua_pushcfunction(L, Lua_Screen_FadeIn);
+        lua_setfield(L, -2, "FadeIn");
+        lua_pushcfunction(L, Lua_Screen_FadeOut);
+        lua_setfield(L, -2, "FadeOut");
+        lua_setglobal(L, "Screen");
+
+        // Table: Camera
+        lua_newtable(L);
+        lua_pushcfunction(L, Lua_Camera_Shake);
+        lua_setfield(L, -2, "Shake");
+        lua_pushcfunction(L, Lua_Camera_Restore);
+        lua_setfield(L, -2, "Restore");
+        lua_setglobal(L, "Camera");
+
+        // Table: File
+        lua_newtable(L);
+        lua_pushcfunction(L, Lua_File_Read);
+        lua_setfield(L, -2, "Read");
+        lua_pushcfunction(L, Lua_File_Write);
+        lua_setfield(L, -2, "Write");
+        lua_pushcfunction(L, Lua_File_Append);
+        lua_setfield(L, -2, "Append");
+        lua_pushcfunction(L, Lua_File_Exists);
+        lua_setfield(L, -2, "Exists");
+        lua_pushcfunction(L, Lua_File_Delete);
+        lua_setfield(L, -2, "Delete");
+        lua_pushcfunction(L, Lua_File_List);
+        lua_setfield(L, -2, "List");
+        lua_pushcfunction(L, Lua_File_GetScriptsPath);
+        lua_setfield(L, -2, "GetScriptsPath");
+        lua_pushcfunction(L, Lua_File_GetDataPath);
+        lua_setfield(L, -2, "GetDataPath");
+        lua_setglobal(L, "File");
+
+        // Register Http & Json Modules
+        Http::RegisterLua(L);
+        Json::RegisterLua(L);
+
         // Table: AMLua
         lua_newtable(L);
-        lua_pushstring(L, "1.0.8");
+        lua_pushstring(L, "1.1.0");
         lua_setfield(L, -2, "Version");
-        lua_pushstring(L, "1.0.8");
+        lua_pushstring(L, "1.1.0");
         lua_setfield(L, -2, "VERSION");
         lua_pushcfunction(L, Lua_RegisterTick);
         lua_setfield(L, -2, "OnTick");
@@ -2404,6 +3381,22 @@ namespace AMLua
         lua_setfield(L, -2, "Game");
         lua_getglobal(L, "Timer");
         lua_setfield(L, -2, "Timer");
+        lua_getglobal(L, "Weapon");
+        lua_setfield(L, -2, "Weapon");
+        lua_getglobal(L, "Device");
+        lua_setfield(L, -2, "Device");
+        lua_getglobal(L, "Audio");
+        lua_setfield(L, -2, "Audio");
+        lua_getglobal(L, "Screen");
+        lua_setfield(L, -2, "Screen");
+        lua_getglobal(L, "Camera");
+        lua_setfield(L, -2, "Camera");
+        lua_getglobal(L, "File");
+        lua_setfield(L, -2, "File");
+        lua_getglobal(L, "Http");
+        lua_setfield(L, -2, "Http");
+        lua_getglobal(L, "Json");
+        lua_setfield(L, -2, "Json");
 
         lua_setglobal(L, "AMLua");
 
@@ -2441,7 +3434,7 @@ namespace AMLua
         }
 
         Log("=========================================");
-        Log("AMLua: Android Mod Lua Script Loader 1.0.8");
+        Log("AMLua: Android Mod Lua Script Loader 1.1.0");
         Log("Target: libGTASA.so (base: %p, size: %zu)", (void*)g_pGTASA, (size_t)g_LibGTASASize);
         Log("Log target: %s", g_LogFilePath.c_str());
         Log("Scripts dir: %s", g_ScriptsDirPath.c_str());
@@ -2597,7 +3590,33 @@ namespace AMLua
             if (!pWorldPlayers) pWorldPlayers = (void*)(g_pGTASA + 0x84E7A8);
             #endif
             Log("Symbol CWorld::Players: %p", pWorldPlayers);
+
+            // 16. CPools
+            pfnGetPedRef = (GetPedRef_t)aml->GetSym(g_pGTASA, "_ZN6CPools10GetPedRefEP4CPed");
+            if (!pfnGetPedRef) pfnGetPedRef = (GetPedRef_t)aml->GetSym(g_pGTASA, "GetPedRef");
+            pfnGetPed = (GetPed_t)aml->GetSym(g_pGTASA, "_ZN6CPools6GetPedEi");
+            if (!pfnGetPed) pfnGetPed = (GetPed_t)aml->GetSym(g_pGTASA, "GetPed");
+            pfnGetVehicleRef = (GetVehicleRef_t)aml->GetSym(g_pGTASA, "_ZN6CPools13GetVehicleRefEP8CVehicle");
+            if (!pfnGetVehicleRef) pfnGetVehicleRef = (GetVehicleRef_t)aml->GetSym(g_pGTASA, "GetVehicleRef");
+            pfnGetVehicle = (GetVehicle_t)aml->GetSym(g_pGTASA, "_ZN6CPools10GetVehicleEi");
+            if (!pfnGetVehicle) pfnGetVehicle = (GetVehicle_t)aml->GetSym(g_pGTASA, "GetVehicle");
+            Log("Symbol CPools (GetPedRef: %p, GetVehicleRef: %p)", (void*)pfnGetPedRef, (void*)pfnGetVehicleRef);
+
+            // 17. CPed Weapons
+            pfnGiveWeapon = (GiveWeapon_t)aml->GetSym(g_pGTASA, "_ZN4CPed10GiveWeaponE11eWeaponTypejb");
+            if (!pfnGiveWeapon) pfnGiveWeapon = (GiveWeapon_t)aml->GetSym(g_pGTASA, "_ZN4CPed10GiveWeaponE11eWeaponTypej");
+            if (!pfnGiveWeapon) pfnGiveWeapon = (GiveWeapon_t)aml->GetSym(g_pGTASA, "_ZN4CPed10GiveWeaponEijb");
+            if (!pfnGiveWeapon) pfnGiveWeapon = (GiveWeapon_t)aml->GetSym(g_pGTASA, "_ZN4CPed10GiveWeaponEij");
+            pfnSetCurrentWeapon = (SetCurrentWeapon_t)aml->GetSym(g_pGTASA, "_ZN4CPed16SetCurrentWeaponEi");
+            if (!pfnSetCurrentWeapon) pfnSetCurrentWeapon = (SetCurrentWeapon_t)aml->GetSym(g_pGTASA, "_ZN4CPed16SetCurrentWeaponE11eWeaponType");
+            pfnClearWeapons = (ClearWeapons_t)aml->GetSym(g_pGTASA, "_ZN4CPed12ClearWeaponsEv");
+            pfnRemoveWeapon = (RemoveWeapon_t)aml->GetSym(g_pGTASA, "_ZN4CPed12RemoveWeaponE11eWeaponType");
+            if (!pfnRemoveWeapon) pfnRemoveWeapon = (RemoveWeapon_t)aml->GetSym(g_pGTASA, "_ZN4CPed12RemoveWeaponEi");
+            Log("Symbol CPed Weapons (GiveWeapon: %p, SetCurrentWeapon: %p)", (void*)pfnGiveWeapon, (void*)pfnSetCurrentWeapon);
         }
+
+        // Initialize Http subsystem
+        Http::Init(nullptr, aml ? aml->GetJNIEnvironment() : nullptr);
 
         // Initialize Lua VM
         g_LuaState = luaL_newstate();
@@ -2633,6 +3652,7 @@ namespace AMLua
     {
         if (g_LuaState)
         {
+            Http::Shutdown();
             ClearAllTimers(g_LuaState);
             lua_close(g_LuaState);
             g_LuaState = nullptr;
@@ -2735,6 +3755,9 @@ namespace AMLua
     void ProcessTick()
     {
         if (!g_LuaState) return;
+
+        // Process completed async HTTP responses on main game thread
+        Http::ProcessTick(g_LuaState);
 
         // Calculate delta time in real seconds using high-precision steady_clock
         static auto s_LastTickTime = std::chrono::steady_clock::now();

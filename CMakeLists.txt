@@ -53,6 +53,8 @@ set(AMLUA_SOURCES
     jni/main.cpp
     jni/lua_bindings.cpp
     jni/crash_handler.cpp
+    jni/http_client.cpp
+    jni/json_helper.cpp
     jni/aml/logger.cpp
     jni/aml/config.cpp
     ${LUA_SOURCES}

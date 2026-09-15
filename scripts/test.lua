@@ -1,17 +1,20 @@
 -- ========================================================================
--- AMLua Example Test Script: test.lua (v1.0.9)
+-- AMLua Example Test Script: test.lua (v1.1.0 Major Update)
 -- Target: GTA San Andreas Android (Android Mod Loader)
 -- Menguji fitur:
---   1. Explosion API (Ledakan terarah, efek visual ledakan, ledakan di player/kendaraan)
---   2. Vehicle API (Cek kendaraan, kecepatan km/h, boost, perbaikan, kunci pintu)
---   3. Teleport & Position (Ground Z, teleport player & kendaraan)
---   4. Game Manipulation (Cuaca, jam/waktu, wanted level, uang, speed game)
---   5. Timer Real-Time (Game.Every / Game.After / setInterval / setTimeout)
+--   1. Http API (Get, Post, Download async/sync, JSON REST API)
+--   2. Json API (Json.Decode / Parse, Json.Encode / Stringify)
+--   3. Weapon API (Give, SetCurrent, Remove, Weapon constants)
+--   4. Device API (Vibrate, Toast, BatteryLevel, AndroidVersion, DisplaySize)
+--   5. Audio API (PlaySound, SetRadioStation, GetRadioStation)
+--   6. File I/O API (Read, Write, Append, Exists, Delete, List, Paths)
+--   7. Vehicle API (Spawn/Create, SetColor, SetEngineState, PopTyre)
+--   8. Screen & Camera API (Fade, Shake, Restore)
+--   9. Explosion API & Timers (Detik, Auto-Heal, dll.)
 -- ========================================================================
 
-Game.Log("=== AMLua test.lua (v1.0.9) starting ===")
+Game.Log("=== AMLua test.lua (v1.1.0 Major Update) starting ===")
 
--- Tampilkan daftar mod yang dimuat di logcat / amlua.log
 local scripts = AMLua.GetLoadedScripts()
 Game.Log(string.format("AMLua test.lua loaded with %d active script(s):", #scripts))
 for i, name in ipairs(scripts) do
@@ -19,7 +22,109 @@ for i, name in ipairs(scripts) do
 end
 
 -- ========================================================================
--- 1. FITUR TIMER REAL-TIME (Detik): Auto-Heal & Status
+-- 1. FITUR PERANGKAT (Device API: Toast & Getaran)
+-- ========================================================================
+Device.Toast("AMLua 1.1.0 Active! Internet & Extended APIs Loaded.", true)
+Device.Vibrate(80) -- getar halus 80ms
+
+local battery = Device.GetBatteryLevel()
+local androidVer = Device.GetAndroidVersion()
+Game.Log(string.format("[Device] Android SDK: %d | Battery: %.1f%%", androidVer, battery))
+
+-- ========================================================================
+-- 2. FITUR FILE I/O (File API)
+-- ========================================================================
+local scriptsDir = File.GetScriptsPath()
+local sampleFile = scriptsDir .. "/amlua_status.txt"
+
+-- Tulis data ke file
+File.Write(sampleFile, "AMLua v1.1.0 status: RUNNING OK\nTimestamp: " .. tostring(os.time()))
+if File.Exists(sampleFile) then
+    local content = File.Read(sampleFile)
+    Game.Log("[File I/O Test] Successfully wrote and read file:\n" .. content)
+end
+
+-- ========================================================================
+-- 3. FITUR JSON (Json API: Encode & Decode)
+-- ========================================================================
+local sampleData = {
+    modName = "AMLua",
+    version = "1.1.0",
+    features = { "Http", "Json", "Weapon", "Audio", "Device", "File", "Vehicle" },
+    author = "sunandar3221",
+    active = true
+}
+
+local jsonStr = Json.Encode(sampleData, true) -- pretty print
+Game.Log("[JSON Test] Encoded JSON:\n" .. jsonStr)
+
+local decoded = Json.Decode(jsonStr)
+if decoded and decoded.modName == "AMLua" then
+    Game.Log(string.format("[JSON Test] Decode Success! Mod: %s, Version: %s", decoded.modName, decoded.version))
+end
+
+-- ========================================================================
+-- 4. FITUR INTERNET / HTTP (Http API: Async & Sync)
+-- ========================================================================
+-- Cek koneksi internet via HTTP GET async ke public test API (httpbin atau google)
+Http.Get("https://httpbin.org/get", function(response)
+    if response.ok then
+        Game.Log(string.format("[HTTP] GET Success! Status: %d, Length: %d bytes", response.status, #response.body))
+        
+        -- Parse JSON response
+        local resJson = Json.Decode(response.body)
+        if resJson and resJson.origin then
+            Game.Log("[HTTP] Detected Public IP: " .. resJson.origin)
+            Device.Toast("Internet Connected! IP: " .. resJson.origin, false)
+        end
+    else
+        Game.Log("[HTTP] GET Request finished with error / offline: " .. tostring(response.error))
+    end
+end)
+
+-- ========================================================================
+-- 5. FITUR SENJATA (Weapon API)
+-- ========================================================================
+Game.After(2.0, function()
+    local ped = Player.GetPed()
+    if ped ~= nil then
+        -- Berikan senjata AK-47 dengan 500 peluru
+        Weapon.Give(ped, Weapon.AK47, 500)
+        -- Berikan senjata Desert Eagle dengan 150 peluru
+        Weapon.Give(ped, Weapon.DESERT_EAGLE, 150)
+        -- Pegang senjata AK-47
+        Weapon.SetCurrent(ped, Weapon.AK47)
+
+        -- Putar suara efek sukses (sound ID 1052 = pickup sound)
+        Audio.PlaySound(1052)
+
+        Game.PrintText("~g~Weapon Pack Diberikan!~n~~w~AK-47 & Desert Eagle siap pakai.", 3500)
+        Game.Log("Weapons granted to player (AK-47 & Desert Eagle).")
+    end
+end)
+
+-- ========================================================================
+-- 6. FITUR KENDARAAN (Spawn Infernus & Audio Radio)
+-- ========================================================================
+Game.After(5.0, function()
+    local ped = Player.GetPed()
+    if ped ~= nil then
+        -- Spawn Infernus (Model ID 411) di depan pemain
+        local vehHandle, vehPtr = Vehicle.Create(411)
+        if vehHandle and vehHandle > 0 then
+            -- Ubah warna menjadi Merah (Color 3) & Hitam (Color 0)
+            Vehicle.SetColor(vehHandle, 3, 0)
+
+            Game.PrintText("~y~Infernus Berhasil Di-Spawn!~n~~w~Warna: Merah/Hitam.", 3500)
+            Game.Log(string.format("Spawned Vehicle Infernus handle: %d, pointer: %p", vehHandle, vehPtr))
+        else
+            Game.Log("Failed to spawn vehicle 411")
+        end
+    end
+end)
+
+-- ========================================================================
+-- 7. FITUR TIMER REAL-TIME (Detik): Auto-Heal & Status
 -- ========================================================================
 local healCooldownSec = 0.0
 
@@ -45,92 +150,15 @@ Game.Every(1.0, function()
 end)
 
 -- ========================================================================
--- 2. MANIPULASI GAME (Cuaca, Jam, Uang, Wanted Level)
+-- 8. MANIPULASI GAME (Cuaca, Jam, Uang, Wanted Level)
 -- ========================================================================
 Game.After(3.0, function()
-    -- Set jam game menjadi 12:00 siang
     Game.SetTime(12, 0)
-    local hour, min = Game.GetTime()
-    Game.Log(string.format("Game Clock set to: %02d:%02d", hour, min))
-
-    -- Set cuaca cerah (WEATHER_EXTRASUNNY_LA = 0)
-    Game.SetWeather(0)
-    Game.Log("Game Weather set to EXTRASUNNY_LA (0)")
-
-    -- Bersihkan Wanted Level bintang polisi
+    Game.SetWeather(0) -- Cerah
     Player.ClearWantedLevel()
-    Game.Log("Player Wanted Level cleared to 0.")
+    Player.GiveMoney(5000)
 
-    -- Berikan bonus uang selamat datang
-    Player.GiveMoney(2500)
-    local money = Player.GetMoney()
-    Game.Log(string.format("Player Money: $%d", money))
-
-    Game.PrintText("~y~AMLua v1.0.8 Siap!~n~~w~Cuaca: Cerah | Jam: 12:00~n~~g~+$2,500 Bonus Masuk!", 4000)
+    Game.PrintText("~y~AMLua v1.1.0 Ready!~n~~w~Internet API | Weapon | Vehicle | Audio~n~~g~+$5,000 Bonus!", 4000)
 end)
 
--- ========================================================================
--- 3. MANIPULASI KENDARAAN (Speedometer & Auto-Repair)
--- ========================================================================
-Game.Every(2.0, function()
-    if Player.IsInVehicle() then
-        local veh = Vehicle.GetPlayerVehicle()
-        if veh ~= nil then
-            local speedKmh = Vehicle.GetSpeed(veh)
-            local health = Vehicle.GetHealth(veh)
-
-            -- Log kecepatan kendaraan saat sedang dikendarai
-            Game.Log(string.format("[Vehicle HUD] Speed: %.1f km/h | Health: %.1f", speedKmh, health))
-
-            -- Auto-repair kendaraan jika rusak parah (health < 400)
-            if health > 0.0 and health < 400.0 then
-                Vehicle.Repair(veh)
-                Game.PrintText("~g~Kendaraan Diperbaiki Otomatis!~n~~w~Vehicle Repaired to 1000 HP.", 2500)
-                Game.Log("Vehicle repaired via AMLua Vehicle.Repair API.")
-            end
-        end
-    end
-end)
-
--- ========================================================================
--- 4. CONTOH DEMO TELEPORT & LEDAKAN (Opsional / Helper Function)
--- ========================================================================
--- Fungsi bantuan untuk teleportasi aman ke koordinat tertentu
-function TeleportSafe(x, y)
-    local groundZ = Game.GetGroundZ(x, y)
-    Game.Teleport(x, y, groundZ + 1.0)
-    Game.PrintText(string.format("~g~Teleported to:~n~~w~X: %.1f, Y: %.1f, Z: %.1f", x, y, groundZ + 1.0), 3000)
-    Game.Log(string.format("TeleportSafe executed to (%.2f, %.2f, %.2f)", x, y, groundZ + 1.0))
-end
-
--- Fungsi bantuan untuk membuat ledakan di depan pemain
-function CreateFrontExplosion(distance)
-    local dist = distance or 15.0
-    local x, y, z = Player.GetPosition()
-    local heading = Player.GetHeading() -- dalam derajat
-    local rad = math.rad(heading)
-
-    local expX = x - math.sin(rad) * dist
-    local expY = y + math.cos(rad) * dist
-    local groundZ = Game.GetGroundZ(expX, expY)
-    local expZ = (groundZ and groundZ > -900.0) and (groundZ + 0.8) or (z + 0.8)
-
-    -- Buat ledakan tipe 3 (CAR explosion) dengan radius 10, ada suara & getaran kamera
-    local ok = Explosion.Create(expX, expY, expZ, 3, 10.0, true, 1.0)
-    if ok then
-        Game.PrintText("~r~KABOOM!~n~~w~Ledakan visual berhasil dibuat!", 2500)
-        Game.Log(string.format("Explosion spawned successfully at (%.2f, %.2f, %.2f)", expX, expY, expZ))
-    else
-        Game.Log("Explosion.Create returned false")
-    end
-end
-
--- Demonstrasi otomatis ledakan aman di depan pemain setelah 8 detik
-Game.After(8.0, function()
-    local ped = Player.GetPed()
-    if ped ~= nil then
-        CreateFrontExplosion(18.0)
-    end
-end)
-
-Game.Log("=== AMLua test.lua (v1.0.9) initialized successfully ===")
+Game.Log("=== AMLua test.lua (v1.1.0) initialized successfully ===")
