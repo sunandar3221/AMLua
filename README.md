@@ -1,5 +1,6 @@
 # AMLua - Android Mod Loader (AML) Lua Script Loader
 > **Lua Scripting Runtime & In-Game Mod Loader untuk Grand Theft Auto: San Andreas Android**
+> Btw buat versi 1.1.0 ada bug bikin GTA nya crash, tapi karena saya mau sekolah jadi nanti benerin bug nya
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Android-green.svg)](https://android.com)
