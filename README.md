@@ -39,9 +39,11 @@ Dengan AMLua, para modder tidak perlu lagi melakukan re-kompilasi kode C/C++ yan
    - [Modul Vehicle (Manipulasi & Spawn Kendaraan)](#10-modul-vehicle-manipulasi--spawn-kendaraan)
    - [Modul Game (Manipulasi Dunia & Lingkungan)](#11-modul-game-manipulasi-dunia--lingkungan)
    - [Modul Timer (Alternatif Mudah Berbasis Detik)](#12-modul-timer-alternatif-mudah-berbasis-detik)
-   - [Modul AMLua & Global](#13-modul-amlua--global)
-   - [Daftar Kode Warna & Format Dialog GTA SA](#14-daftar-kode-warna--format-dialog-gta-sa)
+   - [Modul Touch (Trigger Zona Layar Sentuh 1-9 & Gestur Cleo)](#13-modul-touch-trigger-zona-layar-sentuh-1-9--gestur-cleo)
+   - [Modul AMLua & Global](#14-modul-amlua--global)
+   - [Daftar Kode Warna & Format Dialog GTA SA](#15-daftar-kode-warna--format-dialog-gta-sa)
 4. [Belajar Kilat AMLua Sampai Bisa (Tutorial Lengkap dari Nol)](#-belajar-kilat-amlua-sampai-bisa-tutorial-lengkap-dari-nol)
+   - [Pelajaran 14: Trigger Script Pakai Zona Layar Sentuh 1-9 (Cleo Touch Zones)](#pelajaran-14-trigger-script-pakai-zona-layar-sentuh-1-9-cleo-touch-zones)
 5. [In-Game Mod List Viewer (Melihat Daftar Mod Aktif)](#-in-game-mod-list-viewer)
 6. [Panduan Pemasangan di HP Android](#-panduan-pemasangan-di-hp-android)
 7. [Kompilasi / Build dari Source Code](#-kompilasi--build-dari-source-code)
@@ -445,11 +447,103 @@ Fungsi global JavaScript / browser juga tersedia:
 
 ---
 
-### 13. Modul `AMLua` & Global
+### 13. Modul `Touch` (Trigger Zona Layar Sentuh 1-9 & Gestur Cleo)
+AMLua menghadirkan sistem deteksi layar sentuh 9 zona (3x3 grid) yang **100% identik dengan standar CLEO Android**. Anda dapat memicu script atau cheat hanya dengan menyentuh zona tertentu (misal sentuh zona 5 di tengah), gestur geser (slide dari zona 2 ke 8 seperti menu Cleo), atau kombinasi tombol multi-touch (zona 4 + 6).
+
+```text
++---------------------+---------------------+---------------------+
+|       Zona 1        |       Zona 2        |       Zona 3        |  <- Baris Atas (Top)
+|  Top-Left (Kiri)    | Top-Center (Tengah) |  Top-Right (Kanan)  |
++---------------------+---------------------+---------------------+
+|       Zona 4        |       Zona 5        |       Zona 6        |  <- Baris Tengah (Center)
+| Center-Left (Kiri)  | Center (Tgh Layar)  | Center-Right (Kanan)|
++---------------------+---------------------+---------------------+
+|       Zona 7        |       Zona 8        |       Zona 9        |  <- Baris Bawah (Bottom)
+| Bottom-Left (Kiri)  | Bottom-Center (Tgh) | Bottom-Right (Kanan)|
++---------------------+---------------------+---------------------+
+```
+
+#### Tiga Cara Trigger Script Layar Sentuh:
+1. **Event Listeners (Rekomendasi Modern & Ringan)**:
+   ```lua
+   -- Sentuh zona 5 (tengah layar)
+   Touch.OnPress(5, function(zone, x, y)
+       Player.SetHealth(Player.GetPed(), 100)
+       Game.PrintText("~g~Darah Penuh!", 2000)
+   end)
+
+   -- Geser dari atas ke bawah (2 ke 8 kayak Cleo Menu)
+   Touch.OnSlide(2, 8, function(from, to, durationMs)
+       Game.PrintText("~y~Cleo Menu Dibuka!", 2500)
+       Vehicle.Create(522) -- Spawn NRG-500
+   end)
+   ```
+2. **Global Script Functions (Otomatis & Tanpa Perlu Setup)**:
+   Cukup buat fungsi ini di script `.lua` Anda, AMLua otomatis mengeksekusinya:
+   ```lua
+   function onTouchZone(zone, eventType, x, y)
+       -- eventType: "press", "release", "doubletap"
+       if zone == 5 and eventType == "press" then
+           print("Tengah disentuh!")
+       end
+   end
+
+   function onTouchSlide(fromZone, toZone, durationMs)
+       if fromZone == 2 and toZone == 8 then
+           print("Slide Cleo 2 ke 8 terdeteksi!")
+       end
+   end
+   ```
+3. **Polling Loop (Kompatibel Opcode Cleo `0DE0` & `0DE1`)**:
+   ```lua
+   Game.OnTick(function()
+       -- 0DE0: get_touch_point_state 5
+       if Touch.IsPressed(5) then
+           -- sedang menahan zona 5
+       end
+
+       -- 0DE1: get_touch_slide_state 2 8
+       if Touch.IsSlide(2, 8) then
+           -- gestur geser 2 ke 8 terdeteksi
+       end
+   end)
+   ```
+
+#### Daftar Fungsi Lengkap Modul `Touch`:
+| Fungsi | Tipe Return | Deskripsi |
+| :--- | :--- | :--- |
+| `Touch.IsPressed(zone, [minTimeMs])` | `boolean` | Cek apakah zona (1-9) sedang ditekan. Opsi `minTimeMs` untuk syarat minimal waktu tahan. |
+| `Touch.IsZonePressed(zone)` | `boolean` | Alias untuk `Touch.IsPressed(zone)`. |
+| `Touch.GetPointState(zone, [minTimeMs])` | `number (1/0)` | Kompatibel 100% dengan opcode Cleo `0DE0: get_touch_point_state`. |
+| `Touch.IsSlide(fromZone, toZone, [maxAgeMs])` | `boolean` | Cek apakah baru saja terjadi gesekan layar dari `fromZone` ke `toZone`. |
+| `Touch.GetSlideState(from, to, [minMs], [maxMs])` | `number (1/0)` | Kompatibel 100% dengan opcode Cleo `0DE1: get_touch_slide_state`. |
+| `Touch.GetZone()` / `Touch.GetActiveZone()` | `number` | Mengambil nomor zona yang sedang disentuh jari (1-9), atau `0` jika tidak ada. |
+| `Touch.GetPressedZones()` | `table` | Mengambil daftar array semua zona yang sedang aktif ditekan (misal `{1, 5}`). |
+| `Touch.GetHoldTime(zone)` | `number` | Menghitung berapa lama (milidetik) zona telah ditekan secara terus-menerus. |
+| `Touch.GetPos([pointerIdx])` | `x, y, normX, normY, zone` | Mengambil koordinat mentah, koordinat normalisasi (0.0 - 1.0), dan zona sentuhan. |
+| `Touch.IsAnyPressed()` | `boolean` | Mengetahui apakah ada jari yang menyentuh layar saat ini. |
+| `Touch.GetDisplaySize()` | `width, height` | Mengambil lebar dan tinggi resolusi layar HP. |
+| `Touch.OnPress(zone, callback)` | `number (ID)` | Mendaftarkan fungsi yang dipanggil saat zona disentuh (isi zone=0 untuk semua zona). |
+| `Touch.OnRelease(zone, callback)` | `number (ID)` | Mendaftarkan fungsi yang dipanggil saat jari diangkat dari zona. |
+| `Touch.OnHold(zone, durationMs, callback)` | `number (ID)` | Mendaftarkan aksi saat zona ditekan terus-menerus selama minimal `durationMs`. |
+| `Touch.OnSlide(from, to, callback)` | `number (ID)` | Mendaftarkan aksi geser layar (misal 2 ke 8). Alias: `Touch.OnSwipe`. |
+| `Touch.OnDoubleTap(zone, callback)` | `number (ID)` | Mendaftarkan aksi ketuk cepat 2 kali pada suatu zona (< 400ms). |
+| `Touch.OnCombo({zone1, zone2, ...}, callback)` | `number (ID)` | Mendaftarkan aksi tombol kombinasi banyak jari bersamaan (misal `{4, 6}`). |
+| `Touch.RemoveListener(id)` | `boolean` | Menghapus event listener berdasarkan ID. |
+| `Touch.ClearListeners()` | `nil` | Menghapus seluruh listener sentuhan. |
+| `Touch.SetModListEnabled(enable)` | `nil` | Mengaktifkan / mematikan gestur bawaan AMLua (slide 2->8 untuk daftar mod). |
+| `Touch.ShowGrid([durationMs])` | `nil` | Memunculkan petunjuk visual pembagian 9 zona di layar game. |
+
+Konstanta Zona Layar: `Touch.ZONE_TOP_LEFT` (1), `Touch.ZONE_TOP_CENTER` (2), `Touch.ZONE_TOP_RIGHT` (3), `Touch.ZONE_CENTER_LEFT` (4), `Touch.ZONE_CENTER` (5), `Touch.ZONE_CENTER_RIGHT` (6), `Touch.ZONE_BOTTOM_LEFT` (7), `Touch.ZONE_BOTTOM_CENTER` (8), `Touch.ZONE_BOTTOM_RIGHT` (9).
+
+---
+
+### 14. Modul `AMLua` & Global
 Namespace utama yang merangkum seluruh modul sistem dan game:
 - `AMLua.Version` -> `"1.1.0"`
 - `AMLua.Http` -> referensi ke modul `Http`
 - `AMLua.Json` -> referensi ke modul `Json`
+- `AMLua.Touch` -> referensi ke modul `Touch`
 - `AMLua.Weapon` -> referensi ke modul `Weapon`
 - `AMLua.Device` -> referensi ke modul `Device`
 - `AMLua.Audio` -> referensi ke modul `Audio`
@@ -465,7 +559,7 @@ Namespace utama yang merangkum seluruh modul sistem dan game:
 
 ---
 
-### 14. Daftar Kode Warna & Format Dialog GTA SA
+### 15. Daftar Kode Warna & Format Dialog GTA SA
 Teks pada `Game.PrintText()` mendukung kode warna bawaan engine GTA:
 
 | Kode Format | Warna / Efek | Contoh Hasil |
@@ -675,6 +769,55 @@ if File.Exists(savePath) then
     local isi = File.Read(savePath)
     Game.Log("Isi data file:\n" .. isi)
 end
+```
+
+---
+
+### Pelajaran 14: Trigger Script Pakai Zona Layar Sentuh 1-9 (Cleo Touch Zones)
+Sama persis seperti mod CLEO Android, Anda dapat membuat menu cheat, spawn mobil, atau aksi instan menggunakan sentuhan layar:
+
+#### A. Trigger Gestur Geser Cleo (Slide 2 ke 8 untuk Menu)
+```lua
+-- Geser dari zona 2 (atas tengah) ke zona 8 (bawah tengah)
+Touch.OnSlide(2, 8, function(from, to, durationMs)
+    Device.Vibrate(100) -- Getar HP saat gestur berhasil
+    Audio.PlaySound(1058) -- Sound effect bell GTA
+
+    local ped = Player.GetPed()
+    Weapon.Give(ped, Weapon.MINIGUN, 1000)
+    Weapon.Give(ped, Weapon.ROCKETLAUNCHER, 50)
+    Game.PrintText("~g~Menu Cleo Aktif!~n~~w~Senjata Berat Dibuka!", 3000)
+end)
+```
+
+#### B. Trigger Sentuh Tengah Layar (Zona 5)
+```lua
+-- Tekan layar tengah untuk pulihkan darah & armor
+Touch.OnPress(5, function(zone, x, y)
+    local ped = Player.GetPed()
+    Player.SetHealth(ped, 100)
+    Player.SetArmour(ped, 100)
+    Audio.PlaySound(1052)
+    Game.PrintText("~b~Zona 5 Ditekan!~n~~w~Darah & Armor Penuh.", 2000)
+end)
+```
+
+#### C. Trigger Multi-Jari Combo (Sentuh Zona 4 & 6 Bersamaan)
+```lua
+-- Tekan sisi kiri dan kanan tengah bersamaan untuk spawn motor
+Touch.OnCombo({4, 6}, function(zones)
+    local veh = Vehicle.Create(522) -- NRG-500
+    if veh and veh > 0 then
+        Vehicle.SetColor(veh, 6, 1)
+        Game.PrintText("~y~Combo 4+6 Terdeteksi!~n~~w~NRG-500 Siap Dikendarai!", 3000)
+    end
+end)
+```
+
+#### D. Menampilkan Kotak Grid Bantuan 9 Zona di Layar
+```lua
+-- Tampilkan visual grid zona di HUD
+Touch.ShowGrid()
 ```
 
 ---

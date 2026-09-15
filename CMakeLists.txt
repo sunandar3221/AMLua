@@ -52,6 +52,7 @@ set(LUA_SOURCES
 set(AMLUA_SOURCES
     jni/main.cpp
     jni/lua_bindings.cpp
+    jni/touch_manager.cpp
     jni/crash_handler.cpp
     jni/http_client.cpp
     jni/json_helper.cpp

@@ -2,6 +2,7 @@
 #include "crash_handler.h"
 #include "http_client.h"
 #include "json_helper.h"
+#include "touch_manager.h"
 #include <mod/aml.h>
 
 #include <android/log.h>
@@ -2144,63 +2145,10 @@ namespace AMLua
         return 0;
     }
 
-    // Touch event gesture detection
+    // Touch event gesture detection & zone tracking (delegated to TouchManager)
     void OnTouchEvent(int actionType, int trackNum, int x, int y)
     {
-        static int s_MaxX = 1280;
-        static int s_MaxY = 720;
-        if (x > s_MaxX) s_MaxX = x;
-        if (y > s_MaxY) s_MaxY = y;
-
-        static int startX = 0;
-        static int startY = 0;
-        static clock_t startTime = 0;
-        static clock_t lastTapClock = 0;
-
-        // actionType: 0 = DOWN, 1 = MOVE, 2 = UP
-        if (actionType == 0) // DOWN
-        {
-            startX = x;
-            startY = y;
-            startTime = clock();
-
-            clock_t curClock = clock();
-            double elapsedMs = (double)(curClock - lastTapClock) * 1000.0 / CLOCKS_PER_SEC;
-            lastTapClock = curClock;
-
-            bool isTopRight = (x > (int)(s_MaxX * 0.55f) && y < (int)(s_MaxY * 0.40f));
-            bool isTopBar = (y < (int)(s_MaxY * 0.25f));
-
-            if ((isTopRight || isTopBar) && elapsedMs < 650.0 && elapsedMs > 40.0)
-            {
-                ShowScriptListDialog();
-                return;
-            }
-
-            if (trackNum >= 1)
-            {
-                static clock_t lastTwoFingerClock = 0;
-                double tfElapsed = (double)(curClock - lastTwoFingerClock) * 1000.0 / CLOCKS_PER_SEC;
-                if (tfElapsed > 1000.0)
-                {
-                    lastTwoFingerClock = curClock;
-                    ShowScriptListDialog();
-                    return;
-                }
-            }
-        }
-        else if (actionType == 2) // UP
-        {
-            clock_t curClock = clock();
-            double swipeDuration = (double)(curClock - startTime) * 1000.0 / CLOCKS_PER_SEC;
-            int dx = abs(x - startX);
-            int dy = y - startY;
-            if (startY < (int)(s_MaxY * 0.30f) && dy > (int)(s_MaxY * 0.18f) && dx < (int)(s_MaxX * 0.25f) && swipeDuration < 800.0)
-            {
-                ShowScriptListDialog();
-                return;
-            }
-        }
+        TouchManager::OnRawTouchEvent(actionType, trackNum, x, y);
     }
 
     // =========================================================================
@@ -3327,6 +3275,9 @@ namespace AMLua
         Http::RegisterLua(L);
         Json::RegisterLua(L);
 
+        // Register Touch Module (Screen Touch Zones 1-9 & Gestures)
+        TouchManager::RegisterLuaBindings(L);
+
         // Table: AMLua
         lua_newtable(L);
         lua_pushstring(L, "1.1.0");
@@ -3397,6 +3348,8 @@ namespace AMLua
         lua_setfield(L, -2, "Http");
         lua_getglobal(L, "Json");
         lua_setfield(L, -2, "Json");
+        lua_getglobal(L, "Touch");
+        lua_setfield(L, -2, "Touch");
 
         lua_setglobal(L, "AMLua");
 
@@ -3645,6 +3598,9 @@ namespace AMLua
         // Register custom GTA SA bindings
         RegisterAPIs(g_LuaState);
 
+        // Initialize Touch subsystem
+        TouchManager::Init();
+
         Log("Lua 5.4 VM initialized and API bindings registered successfully.");
     }
 
@@ -3652,6 +3608,7 @@ namespace AMLua
     {
         if (g_LuaState)
         {
+            TouchManager::Shutdown(g_LuaState);
             Http::Shutdown();
             ClearAllTimers(g_LuaState);
             lua_close(g_LuaState);
@@ -3775,6 +3732,9 @@ namespace AMLua
         // Clamp dt between 0.0001s and 0.5s to prevent huge jumps across pause/loading screens
         if (dt <= 0.0) dt = 0.0166;
         if (dt > 0.5)  dt = 0.0333;
+
+        // Process touch screen zone inputs, gestures and callbacks on main game thread
+        TouchManager::ProcessTick(g_LuaState, dt);
 
         // Display initial greeting dialog once player is active and world is stabilized (~30 frames)
         if (!s_InitialGreetingShown && pfnFindPlayerPed)
